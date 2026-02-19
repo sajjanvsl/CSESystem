@@ -2004,11 +2004,12 @@ elif st.session_state.user_role == "teacher":
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center'>
-    <p>Continuous Student Evaluation & Monitoring System v3.2
-    <p>Design and Maintained by: S P Sajjan, Assistant Professor, GFGCW, Jamkhandi</p>
+    <p>Continuous Student Evaluation & Monitoring System v3.2</p>
+    Design and Maintained by: S P Sajjan, Assistant Professor, GFGCW, Jamkhandi</p>
     <p>📧 Contact: sajjanvsl@gmail.com | 📞 Help Desk: 9008802403</p>
     <p>✅ Auto-grading enabled | 📚 Dynamic Subjects & Classes | 🔐 Forgot Password | 📂 File Upload/Download/View</p>
     <p>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 
 """, unsafe_allow_html=True)
+
