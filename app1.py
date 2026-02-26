@@ -287,6 +287,21 @@ def init_database():
             )
         ''')
 
+    # Deletion requests table
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='deletion_requests'")
+    if not c.fetchone():
+        c.execute('''
+            CREATE TABLE deletion_requests (
+                request_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                user_type TEXT NOT NULL,
+                reason TEXT,
+                status TEXT DEFAULT 'Pending',
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP
+            )
+        ''')
+
     # Indexes
     try:
         c.execute('CREATE INDEX IF NOT EXISTS idx_submissions_date ON submissions(date)')
@@ -379,19 +394,6 @@ def request_data_deletion(email, user_type, reason):
     """Submit a data deletion request."""
     conn = get_db_connection()
     c = conn.cursor()
-    
-    # Create deletion requests table if not exists
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS deletion_requests (
-            request_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL,
-            user_type TEXT NOT NULL,
-            reason TEXT,
-            status TEXT DEFAULT 'Pending',
-            requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMP
-        )
-    ''')
     
     c.execute('''
         INSERT INTO deletion_requests (email, user_type, reason, status)
@@ -2617,115 +2619,115 @@ elif st.session_state.user_role == "teacher":
                         st.session_state.current_teacher = tuple(teacher)
                         st.rerun()
 
-    # Manage System - Fixed Stats Display
-elif st.session_state.page == "⚙️ Manage System":
-    st.header("System Management")
-    tab1, tab2 = st.tabs(["📊 System Stats", "⚙️ Settings"])
-    with tab1:
-        st.subheader("System Statistics")
-        conn = get_db_connection()
-        
-        # Initialize stats with default values
-        stats_data = {
-            "Metric": [],
-            "Value": []
-        }
-        
-        try:
-            # Get each stat individually with error handling
-            total_students = pd.read_sql_query("SELECT COUNT(*) FROM students", conn).iloc[0,0] or 0
-            stats_data["Metric"].append("Total Students")
-            stats_data["Value"].append(total_students)
-        except:
-            stats_data["Metric"].append("Total Students")
-            stats_data["Value"].append(0)
+    # Manage System (FIXED STATS SECTION)
+    elif st.session_state.page == "⚙️ Manage System":
+        st.header("System Management")
+        tab1, tab2 = st.tabs(["📊 System Stats", "⚙️ Settings"])
+        with tab1:
+            st.subheader("System Statistics")
+            conn = get_db_connection()
             
-        try:
-            total_teachers = pd.read_sql_query("SELECT COUNT(*) FROM teachers", conn).iloc[0,0] or 0
-            stats_data["Metric"].append("Total Teachers")
-            stats_data["Value"].append(total_teachers)
-        except:
-            stats_data["Metric"].append("Total Teachers")
-            stats_data["Value"].append(0)
+            # Initialize stats with default values
+            stats_data = {
+                "Metric": [],
+                "Value": []
+            }
             
-        try:
-            total_subjects = pd.read_sql_query("SELECT COUNT(*) FROM subjects", conn).iloc[0,0] or 0
-            stats_data["Metric"].append("Total Subjects")
-            stats_data["Value"].append(total_subjects)
-        except:
-            stats_data["Metric"].append("Total Subjects")
-            stats_data["Value"].append(0)
+            try:
+                total_students = pd.read_sql_query("SELECT COUNT(*) FROM students", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Students")
+                stats_data["Value"].append(total_students)
+            except:
+                stats_data["Metric"].append("Total Students")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_teachers = pd.read_sql_query("SELECT COUNT(*) FROM teachers", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Teachers")
+                stats_data["Value"].append(total_teachers)
+            except:
+                stats_data["Metric"].append("Total Teachers")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_subjects = pd.read_sql_query("SELECT COUNT(*) FROM subjects", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Subjects")
+                stats_data["Value"].append(total_subjects)
+            except:
+                stats_data["Metric"].append("Total Subjects")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_submissions = pd.read_sql_query("SELECT COUNT(*) FROM submissions", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Submissions")
+                stats_data["Value"].append(total_submissions)
+            except:
+                stats_data["Metric"].append("Total Submissions")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_activities = pd.read_sql_query("SELECT COUNT(*) FROM activities", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Activities")
+                stats_data["Value"].append(total_activities)
+            except:
+                stats_data["Metric"].append("Total Activities")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_points = pd.read_sql_query("SELECT SUM(total_points) FROM students", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Points Awarded")
+                stats_data["Value"].append(total_points)
+            except:
+                stats_data["Metric"].append("Total Points Awarded")
+                stats_data["Value"].append(0)
+                
+            try:
+                ai_graded = pd.read_sql_query("SELECT COUNT(*) FROM submissions WHERE ai_confidence > 0", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("AI-Graded Submissions")
+                stats_data["Value"].append(ai_graded)
+            except:
+                stats_data["Metric"].append("AI-Graded Submissions")
+                stats_data["Value"].append(0)
+                
+            try:
+                # Check if deletion_requests table exists
+                c = conn.cursor()
+                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='deletion_requests'")
+                if c.fetchone():
+                    pending_deletions = pd.read_sql_query("SELECT COUNT(*) FROM deletion_requests WHERE status='Pending'", conn).iloc[0,0] or 0
+                else:
+                    pending_deletions = 0
+                stats_data["Metric"].append("Pending Deletion Requests")
+                stats_data["Value"].append(pending_deletions)
+            except:
+                stats_data["Metric"].append("Pending Deletion Requests")
+                stats_data["Value"].append(0)
+                
+            conn.close()
             
-        try:
-            total_submissions = pd.read_sql_query("SELECT COUNT(*) FROM submissions", conn).iloc[0,0] or 0
-            stats_data["Metric"].append("Total Submissions")
-            stats_data["Value"].append(total_submissions)
-        except:
-            stats_data["Metric"].append("Total Submissions")
-            stats_data["Value"].append(0)
-            
-        try:
-            total_activities = pd.read_sql_query("SELECT COUNT(*) FROM activities", conn).iloc[0,0] or 0
-            stats_data["Metric"].append("Total Activities")
-            stats_data["Value"].append(total_activities)
-        except:
-            stats_data["Metric"].append("Total Activities")
-            stats_data["Value"].append(0)
-            
-        try:
-            total_points = pd.read_sql_query("SELECT SUM(total_points) FROM students", conn).iloc[0,0] or 0
-            stats_data["Metric"].append("Total Points Awarded")
-            stats_data["Value"].append(total_points)
-        except:
-            stats_data["Metric"].append("Total Points Awarded")
-            stats_data["Value"].append(0)
-            
-        try:
-            ai_graded = pd.read_sql_query("SELECT COUNT(*) FROM submissions WHERE ai_confidence > 0", conn).iloc[0,0] or 0
-            stats_data["Metric"].append("AI-Graded Submissions")
-            stats_data["Value"].append(ai_graded)
-        except:
-            stats_data["Metric"].append("AI-Graded Submissions")
-            stats_data["Value"].append(0)
-            
-        try:
-            # Check if deletion_requests table exists
-            c = conn.cursor()
-            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='deletion_requests'")
-            if c.fetchone():
-                pending_deletions = pd.read_sql_query("SELECT COUNT(*) FROM deletion_requests WHERE status='Pending'", conn).iloc[0,0] or 0
+            # Create DataFrame only if we have data
+            if stats_data["Metric"]:
+                # Ensure all lists are the same length (they will be because we added them together)
+                stats_df = pd.DataFrame(stats_data)
+                st.dataframe(stats_df, use_container_width=True, hide_index=True)
             else:
-                pending_deletions = 0
-            stats_data["Metric"].append("Pending Deletion Requests")
-            stats_data["Value"].append(pending_deletions)
-        except:
-            stats_data["Metric"].append("Pending Deletion Requests")
-            stats_data["Value"].append(0)
-            
-        conn.close()
-        
-        # Create DataFrame only if we have data
-        if stats_data["Metric"]:
-            # Ensure all lists are the same length (they will be because we added them together)
-            stats_df = pd.DataFrame(stats_data)
-            st.dataframe(stats_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No statistics available.")
-            
-        st.info("📌 Data is automatically cleaned - only last 6 months of submissions and activities are kept.")
-    with tab2:
-        st.subheader("System Settings")
-        st.success("✅ Auto-grading with AI is enabled")
-        st.success("✅ Duplicate submission prevention is enabled")
-        st.write("**Current Points System:**")
-        st.write("- Daily Homework: 5 points (AI-adjusted)")
-        st.write("- Seminar: 10 points (AI-adjusted)")
-        st.write("- Project: 15 points (AI-adjusted)")
-        st.write("- Extra Activity: 25 points (AI-adjusted)")
-        st.write("- Weekly Assignment: 15 points (AI-adjusted)")
-        st.write("- Monthly Assignment: 30 points (AI-adjusted)")
-        st.write("- Research Paper: 25 points (AI-adjusted)")
-        st.write("- Lab Report: 8 points (AI-adjusted)")
+                st.info("No statistics available.")
+                
+            st.info("📌 Data is automatically cleaned - only last 6 months of submissions and activities are kept.")
+        with tab2:
+            st.subheader("System Settings")
+            st.success("✅ Auto-grading with AI is enabled")
+            st.success("✅ Duplicate submission prevention is enabled")
+            st.write("**Current Points System:**")
+            st.write("- Daily Homework: 5 points (AI-adjusted)")
+            st.write("- Seminar: 10 points (AI-adjusted)")
+            st.write("- Project: 15 points (AI-adjusted)")
+            st.write("- Extra Activity: 25 points (AI-adjusted)")
+            st.write("- Weekly Assignment: 15 points (AI-adjusted)")
+            st.write("- Monthly Assignment: 30 points (AI-adjusted)")
+            st.write("- Research Paper: 25 points (AI-adjusted)")
+            st.write("- Lab Report: 8 points (AI-adjusted)")
+
 # ========== FOOTER WITH FOUR TABS ==========
 st.markdown("---")
 
@@ -3050,4 +3052,3 @@ st.markdown("""
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
-
