@@ -1374,7 +1374,7 @@ cleanup_old_data()
 Path("uploads").mkdir(exist_ok=True)
 
 # ==================== STREAMLIT UI ====================
-st.title("📚 Continuous Student Evaluation & Monitoring System")
+st.title("📚 AI Based:Continuous Student Evaluation & Monitoring System")
 st.markdown("---")
 
 # Show sklearn availability warning if needed
@@ -3052,3 +3052,4 @@ st.markdown("""
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
+
