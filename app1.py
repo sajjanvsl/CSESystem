@@ -3177,7 +3177,7 @@ if st.session_state.get('show_contact', False):
             
             ### 🤝 Support
             For technical support, bug reports, or feature requests:
-            - Email: support@edueval.com
+            - Email: sajjanvsl@gmail.com
             - Response time: Within 24 hours
             - Available: Monday to Friday, 9 AM - 5 PM IST
             """)
@@ -3296,4 +3296,5 @@ st.markdown("""
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
+
 
