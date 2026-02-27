@@ -3170,9 +3170,10 @@ if st.session_state.get('show_contact', False):
             Karnataka, India - 587301
             
             ### 🌐 Online Presence
-            - [LinkedIn](https://linkedin.com/in/spsajjan)
-            - [ResearchGate](https://researchgate.net/profile/S-P-Sajjan)
             - [Google Scholar](https://scholar.google.com)
+            - [ResearchGate](https://www.researchgate.net/profile/Sharanabasappa-Sajjan-2?ev=hdr_xprf)
+            - [Facebook](https://www.facebook.com/sajjanvsl)
+            
             
             ### 🤝 Support
             For technical support, bug reports, or feature requests:
@@ -3295,3 +3296,4 @@ st.markdown("""
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
+
