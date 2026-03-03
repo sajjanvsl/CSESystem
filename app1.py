@@ -54,7 +54,7 @@ def get_db_path():
 DB_PATH = get_db_path()
 print(f"📁 Database location: {DB_PATH}")
 
-# ---------- Session State for Persistence ----------
+# ---------- Session State ----------
 if 'current_student' not in st.session_state:
     st.session_state.current_student = None
 if 'current_teacher' not in st.session_state:
@@ -110,18 +110,25 @@ def validate_class_name(class_name):
     
     # Common patterns for class names
     patterns = [
+        # Pattern for "BCA VI", "BA II", "BCom I", "MCA III" etc.
         r'^(BA|BCom|BSC|BCA|MCA|MA|MCom|MSC|BBA|MBA|B TECH|M TECH|DIPLOMA)\s*([IVXLCDM]+|\d+)$',
+        # Pattern for "Semester 1", "Sem 2", "Semester VI" etc.
         r'^(SEMESTER|SEM)\s*([IVXLCDM]+|\d+)$',
+        # Pattern for "1st Year", "2nd Year", "3rd Year" etc.
         r'^(\d+)(?:ST|ND|RD|TH)?\s*YEAR$',
+        # Pattern for "Class 10", "Class 12" etc.
         r'^CLASS\s*(\d+)$'
     ]
     
     for pattern in patterns:
         match = re.match(pattern, class_upper)
         if match:
+            # Extract the main part and number/suffix
             parts = match.groups()
             if len(parts) == 2:
                 prefix, suffix = parts
+                
+                # Convert Roman numerals to standard form
                 roman_map = {'I': 'I', 'II': 'II', 'III': 'III', 'IV': 'IV', 'V': 'V', 'VI': 'VI', 
                             'VII': 'VII', 'VIII': 'VIII', 'IX': 'IX', 'X': 'X'}
                 
@@ -137,11 +144,14 @@ def validate_class_name(class_name):
                 else:
                     normalized = f"{prefix} {suffix}"
                 
+                # Clean up the prefix (remove extra spaces)
                 normalized = ' '.join(normalized.split())
                 return True, normalized
     
+    # If no pattern matches but it looks like a reasonable class name
     if len(class_name) <= 30 and re.match(r'^[A-Za-z0-9\s\-]+$', class_name):
-        return True, class_name.upper()
+        # Still warn but accept it
+        return True, class_name.upper(), "⚠️ Non-standard format. Please use format like 'BCA VI' for consistency."
     
     return False, "❌ Invalid class name format. Please use standard format like 'BCA VI', 'BA II', 'BCom I', 'Semester 1', etc."
 
@@ -169,7 +179,7 @@ def init_database():
 
     print("🆕 Creating new database tables...")
 
-    # Submissions table
+    # Submissions table with AI columns
     c.execute('''
         CREATE TABLE submissions (
             submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -325,7 +335,7 @@ def init_database():
         )
     ''')
 
-    # Reference answers table
+    # Sample reference answers table for AI validation
     c.execute('''
         CREATE TABLE reference_answers (
             answer_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -351,12 +361,15 @@ def init_database():
     ''')
 
     # Indexes
-    c.execute('CREATE INDEX idx_submissions_date ON submissions(date)')
-    c.execute('CREATE INDEX idx_activities_date ON activities(date)')
-    c.execute('CREATE INDEX idx_submissions_student ON submissions(student_id)')
-    c.execute('CREATE INDEX idx_activities_student ON activities(student_id)')
-    c.execute('CREATE INDEX idx_student_subjects ON student_subjects(student_id, subject_id)')
-    c.execute('CREATE INDEX idx_reference_answers ON reference_answers(subject, topic)')
+    try:
+        c.execute('CREATE INDEX IF NOT EXISTS idx_submissions_date ON submissions(date)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_activities_date ON activities(date)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(student_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_activities_student ON activities(student_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_student_subjects ON student_subjects(student_id, subject_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_reference_answers ON reference_answers(subject, topic)')
+    except:
+        pass
 
     conn.commit()
     conn.close()
@@ -365,7 +378,7 @@ def init_database():
 
 # ---------- Test User Creation ----------
 def ensure_test_users():
-    """Create test users only if they don't exist."""
+    """Create test users only if they don't exist - preserves existing registrations."""
     conn = get_db_connection()
     c = conn.cursor()
     
@@ -393,7 +406,7 @@ def ensure_test_users():
     else:
         print("✅ Test teacher already exists")
 
-    # Add sample reference answers if none exist
+    # Add some sample reference answers
     c.execute("SELECT COUNT(*) FROM reference_answers")
     if c.fetchone()[0] == 0:
         sample_answers = [
@@ -422,7 +435,7 @@ if not st.session_state.db_initialized:
 
 # ---------- Cleanup old data (optional, runs occasionally) ----------
 def cleanup_old_data():
-    """Delete submissions and activities older than 6 months."""
+    """Delete submissions and activities older than 6 months - preserves user accounts."""
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -437,8 +450,8 @@ def cleanup_old_data():
     except Exception as e:
         print(f"Cleanup skipped: {e}")
 
-# Run cleanup occasionally
-if random.randint(1, 100) == 1:
+# Run cleanup occasionally (not on every run)
+if random.randint(1, 100) == 1:  # 1% chance on each run
     cleanup_old_data()
 
 # ---------- Data Deletion Functions ----------
@@ -446,10 +459,12 @@ def request_data_deletion(email, user_type, reason):
     """Submit a data deletion request."""
     conn = get_db_connection()
     c = conn.cursor()
+    
     c.execute('''
         INSERT INTO deletion_requests (email, user_type, reason, status)
         VALUES (?, ?, ?, 'Pending')
     ''', (email, user_type, reason))
+    
     conn.commit()
     conn.close()
     return True
@@ -460,10 +475,12 @@ def process_data_deletion(email, user_type):
     c = conn.cursor()
     
     if user_type == "student":
+        # Get student_id
         c.execute("SELECT student_id FROM students WHERE email = ?", (email,))
         student = c.fetchone()
         if student:
             student_id = student[0]
+            # Delete all related data
             c.execute('DELETE FROM submissions WHERE student_id = ?', (student_id,))
             c.execute('DELETE FROM activities WHERE student_id = ?', (student_id,))
             c.execute('DELETE FROM daily_activity WHERE student_id = ?', (student_id,))
@@ -472,8 +489,10 @@ def process_data_deletion(email, user_type):
             c.execute('DELETE FROM student_subjects WHERE student_id = ?', (student_id,))
             c.execute('DELETE FROM students WHERE student_id = ?', (student_id,))
     else:
+        # Delete teacher
         c.execute('DELETE FROM teachers WHERE email = ?', (email,))
     
+    # Update deletion request status
     c.execute('''
         UPDATE deletion_requests 
         SET status = 'Processed', processed_at = CURRENT_TIMESTAMP
@@ -486,7 +505,10 @@ def process_data_deletion(email, user_type):
 
 # ---------- AI Validation Functions ----------
 def validate_submission_with_ai(submission_text, subject, topic=None):
-    """Validate student submission using AI techniques."""
+    """
+    Validate student submission using AI techniques.
+    Falls back to basic analysis if scikit-learn is not available.
+    """
     if not submission_text or len(submission_text.strip()) < 10:
         return {
             'confidence': 0.3,
@@ -497,9 +519,11 @@ def validate_submission_with_ai(submission_text, subject, topic=None):
             'keyword_score': 0.0
         }
     
+    # Basic metrics
     word_count = len(submission_text.split())
     sentence_count = len(re.findall(r'[.!?]+', submission_text))
     
+    # Get reference answers for this subject/topic
     conn = get_db_connection()
     c = conn.cursor()
     if topic:
@@ -515,6 +539,7 @@ def validate_submission_with_ai(submission_text, subject, topic=None):
     references = [row[0] for row in c.fetchall()]
     conn.close()
     
+    # Calculate similarity with reference answers
     similarity_scores = []
     if references and SKLEARN_AVAILABLE:
         try:
@@ -526,6 +551,7 @@ def validate_submission_with_ai(submission_text, subject, topic=None):
         except:
             similarity_scores = []
     elif references and not SKLEARN_AVAILABLE:
+        # Basic word overlap similarity (fallback)
         submission_words = set(submission_text.lower().split())
         for ref in references:
             ref_words = set(ref.lower().split())
@@ -536,8 +562,10 @@ def validate_submission_with_ai(submission_text, subject, topic=None):
             else:
                 similarity_scores.append(0)
     
+    # Calculate plagiarism score (max similarity)
     plagiarism_score = max(similarity_scores) if similarity_scores else 0.0
     
+    # Extract keywords (simple version)
     common_keywords = {
         'Database Management': ['sql', 'query', 'table', 'database', 'normalization', 'index', 'data', 'server'],
         'Web Technologies': ['html', 'css', 'javascript', 'web', 'browser', 'server', 'client', 'http'],
@@ -545,17 +573,27 @@ def validate_submission_with_ai(submission_text, subject, topic=None):
         'General': ['example', 'explain', 'define', 'describe', 'compare', 'analyze', 'discuss']
     }
     
+    # Get relevant keywords for this subject
     keywords = common_keywords.get(subject, common_keywords['General'])
+    
+    # Calculate keyword relevance
     submission_lower = submission_text.lower()
     keyword_matches = sum(1 for keyword in keywords if keyword in submission_lower)
     keyword_score = keyword_matches / len(keywords) if keywords else 0.5
     
-    length_score = min(word_count / 100, 1.0)
-    structure_score = min(sentence_count / 5, 1.0)
+    # Quality score based on multiple factors
+    length_score = min(word_count / 100, 1.0)  # Max score at 100 words
+    structure_score = min(sentence_count / 5, 1.0)  # Max score at 5 sentences
+    
+    # Combined quality score
     quality_score = (length_score * 0.3 + structure_score * 0.2 + keyword_score * 0.5)
+    
+    # Confidence score (0-1)
     confidence = quality_score * 0.7 + (1 - plagiarism_score) * 0.3
     
+    # Generate AI feedback
     feedback_parts = []
+    
     if word_count < 50:
         feedback_parts.append("• Your submission could be more detailed. Aim for at least 50-100 words.")
     elif word_count > 200:
@@ -609,10 +647,14 @@ def add_reference_answer(subject, topic, answer_text, teacher_id):
 
 # ---------- Duplicate Submission Check ----------
 def check_duplicate_submission(student_id, subject, title, description, submission_type):
-    """Check if a student has already submitted a similar assignment."""
+    """
+    Check if a student has already submitted a similar assignment.
+    Returns (is_duplicate, message)
+    """
     conn = get_db_connection()
     c = conn.cursor()
     
+    # Check for exact same title in the same subject (within last 30 days)
     thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
     c.execute('''
         SELECT submission_id, date, title FROM submissions 
@@ -625,7 +667,9 @@ def check_duplicate_submission(student_id, subject, title, description, submissi
         conn.close()
         return True, f"You have already submitted an assignment with the same title on {exact_match[1]}. Please use a different title."
     
+    # Check for very similar content (if description is long enough)
     if len(description) > 50:
+        # Get recent submissions from this student in the same subject
         c.execute('''
             SELECT submission_id, description, date FROM submissions 
             WHERE student_id = ? AND subject = ? AND date >= ?
@@ -637,6 +681,7 @@ def check_duplicate_submission(student_id, subject, title, description, submissi
         
         for sub in recent_subs:
             if sub[1] and len(sub[1]) > 50:
+                # Calculate similarity
                 if SKLEARN_AVAILABLE:
                     try:
                         vectorizer = TfidfVectorizer(stop_words='english')
@@ -649,6 +694,7 @@ def check_duplicate_submission(student_id, subject, title, description, submissi
                     except:
                         pass
                 else:
+                    # Basic word overlap check
                     words1 = set(description.lower().split())
                     words2 = set(sub[1].lower().split())
                     if len(words1) > 0 and len(words2) > 0:
@@ -670,6 +716,7 @@ def add_student_with_password(reg_no, name, class_name, email, password, phone=N
         reg_no = reg_no.strip()
         email = email.strip().lower()
         
+        # Validate class name
         is_valid, normalized_class = validate_class_name(class_name)
         if not is_valid:
             st.error(normalized_class)
@@ -677,6 +724,7 @@ def add_student_with_password(reg_no, name, class_name, email, password, phone=N
         
         password_hash = hash_password(password)
         
+        # Check duplicates (case-insensitive)
         c.execute("SELECT reg_no, email FROM students WHERE reg_no = ? COLLATE NOCASE OR email = ?", (reg_no, email))
         existing = c.fetchone()
         if existing:
@@ -696,9 +744,98 @@ def add_student_with_password(reg_no, name, class_name, email, password, phone=N
     finally:
         conn.close()
 
+def edit_student_registration(student_id, name, class_name, email, phone):
+    """Update student registration details (excluding password and reg_no)."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        email = email.strip().lower()
+        
+        # Validate class name
+        is_valid, normalized_class = validate_class_name(class_name)
+        if not is_valid:
+            st.error(normalized_class)
+            return False
+        
+        # Check if email is already used by another student
+        c.execute("SELECT student_id FROM students WHERE email = ? AND student_id != ?", (email, student_id))
+        if c.fetchone():
+            st.error("Email already exists for another student!")
+            return False
+
+        c.execute('''
+            UPDATE students 
+            SET name = ?, class = ?, email = ?, phone = ?
+            WHERE student_id = ?
+        ''', (name, normalized_class, email, phone, student_id))
+        conn.commit()
+        
+        # Update the session with new values
+        c.execute("SELECT * FROM students WHERE student_id = ?", (student_id,))
+        updated_student = c.fetchone()
+        st.session_state.current_student = updated_student
+        
+        st.success(f"Registration updated! Your class has been set to: {normalized_class}")
+        return True
+    except Exception as e:
+        st.error(f"Error updating registration: {str(e)}")
+        return False
+    finally:
+        conn.close()
+
+def faculty_edit_student(student_id, reg_no, name, class_name, email, phone, password=None):
+    """Faculty can edit all student details including registration number and password."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        reg_no = reg_no.strip()
+        email = email.strip().lower()
+        
+        # Validate class name
+        is_valid, normalized_class = validate_class_name(class_name)
+        if not is_valid:
+            st.error(normalized_class)
+            return False
+        
+        # Check if reg_no is already used by another student (case-insensitive)
+        c.execute("SELECT student_id FROM students WHERE reg_no = ? COLLATE NOCASE AND student_id != ?", (reg_no, student_id))
+        if c.fetchone():
+            st.error("Registration number already exists for another student!")
+            return False
+        
+        # Check if email is already used by another student
+        c.execute("SELECT student_id FROM students WHERE email = ? AND student_id != ?", (email, student_id))
+        if c.fetchone():
+            st.error("Email already exists for another student!")
+            return False
+        
+        if password:
+            password_hash = hash_password(password)
+            c.execute('''
+                UPDATE students 
+                SET reg_no = ?, name = ?, class = ?, email = ?, phone = ?, password = ?
+                WHERE student_id = ?
+            ''', (reg_no, name, normalized_class, email, phone, password_hash, student_id))
+        else:
+            c.execute('''
+                UPDATE students 
+                SET reg_no = ?, name = ?, class = ?, email = ?, phone = ?
+                WHERE student_id = ?
+            ''', (reg_no, name, normalized_class, email, phone, student_id))
+        
+        conn.commit()
+        st.success(f"Student updated! Class normalized to: {normalized_class}")
+        return True
+    except Exception as e:
+        st.error(f"Error updating student: {str(e)}")
+        return False
+    finally:
+        conn.close()
+
 def authenticate_student(login_id, password, use_regno=False):
     conn = get_db_connection()
     c = conn.cursor()
+    # Get column names
     c.execute("PRAGMA table_info(students)")
     columns = [col[1] for col in c.fetchall()]
     
@@ -710,17 +847,49 @@ def authenticate_student(login_id, password, use_regno=False):
     conn.close()
     
     if student:
+        # Create dictionary mapping column name to value
         student_dict = dict(zip(columns, student))
         stored_hash = student_dict['password']
         if stored_hash == hash_password(password):
             st.session_state.logged_in = True
-            return student
+            return student  # return tuple for backward compatibility
     return None
+
+def update_student_profile(student_id, name, email, phone, password=None):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        if password:
+            pwd_hash = hash_password(password)
+            c.execute('''
+                UPDATE students SET name = ?, email = ?, phone = ?, password = ?
+                WHERE student_id = ?
+            ''', (name, email, phone, pwd_hash, student_id))
+        else:
+            c.execute('''
+                UPDATE students SET name = ?, email = ?, phone = ?
+                WHERE student_id = ?
+            ''', (name, email, phone, student_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error updating profile: {str(e)}")
+        return False
+    finally:
+        conn.close()
 
 def get_student(reg_no):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute("SELECT * FROM students WHERE reg_no = ?", (reg_no.strip(),))
+    student = c.fetchone()
+    conn.close()
+    return student
+
+def get_student_by_id(student_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM students WHERE student_id = ?", (student_id,))
     student = c.fetchone()
     conn.close()
     return student
@@ -760,6 +929,29 @@ def authenticate_teacher(email, password):
             return teacher
     return None
 
+def update_teacher_profile(teacher_id, name, email, department, password=None):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        if password:
+            pwd_hash = hash_password(password)
+            c.execute('''
+                UPDATE teachers SET name = ?, email = ?, department = ?, password = ?
+                WHERE teacher_id = ?
+            ''', (name, email.strip().lower(), department, pwd_hash, teacher_id))
+        else:
+            c.execute('''
+                UPDATE teachers SET name = ?, email = ?, department = ?
+                WHERE teacher_id = ?
+            ''', (name, email.strip().lower(), department, teacher_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error updating profile: {str(e)}")
+        return False
+    finally:
+        conn.close()
+
 def get_all_teachers():
     conn = get_db_connection()
     try:
@@ -770,18 +962,21 @@ def get_all_teachers():
     finally:
         conn.close()
 
-# ---------- Subject Functions ----------
+# ---------- Subject Functions (FIXED) ----------
 def add_subject(subject_code, subject_name, class_name, teacher_id=None):
+    """Add a new subject with duplicate prevention."""
     conn = get_db_connection()
     c = conn.cursor()
     try:
         subject_code = subject_code.strip().upper()
         
+        # Check if subject code already exists
         c.execute("SELECT subject_id FROM subjects WHERE subject_code = ? COLLATE NOCASE", (subject_code,))
         if c.fetchone():
             st.error(f"❌ Subject code '{subject_code}' already exists! Please use a different code.")
             return False
         
+        # Validate class name
         is_valid, normalized_class = validate_class_name(class_name)
         if not is_valid:
             st.error(normalized_class)
@@ -794,26 +989,31 @@ def add_subject(subject_code, subject_name, class_name, teacher_id=None):
         conn.commit()
         st.success(f"✅ Subject '{subject_code}' created successfully for class: {normalized_class}")
         return True
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError as e:
         st.error(f"❌ Subject code already exists!")
         return False
     finally:
         conn.close()
 
 def delete_subject(subject_id):
+    """Delete a subject and all its registrations."""
     conn = get_db_connection()
     c = conn.cursor()
     try:
+        # First check if any students are registered for this subject
         c.execute("SELECT COUNT(*) FROM student_subjects WHERE subject_id = ?", (subject_id,))
         count = c.fetchone()[0]
         
         if count > 0:
+            # Ask for confirmation
             if not st.session_state.get(f'confirm_delete_{subject_id}', False):
                 st.session_state[f'confirm_delete_{subject_id}'] = True
                 st.warning(f"⚠️ This subject has {count} student registrations. Delete anyway?")
                 return False
         
+        # Delete student registrations first
         c.execute("DELETE FROM student_subjects WHERE subject_id = ?", (subject_id,))
+        # Delete the subject
         c.execute("DELETE FROM subjects WHERE subject_id = ?", (subject_id,))
         conn.commit()
         st.success("✅ Subject deleted successfully!")
@@ -824,10 +1024,13 @@ def delete_subject(subject_id):
     finally:
         conn.close()
 
+# FIXED: Enhanced get_all_subjects with multiple matching strategies
 def get_all_subjects(class_name=None):
+    """Get all subjects, optionally filtered by class with multiple matching strategies."""
     conn = get_db_connection()
     try:
         if class_name:
+            # First try exact match
             query = '''
                 SELECT s.*, t.name as teacher_name
                 FROM subjects s
@@ -837,11 +1040,13 @@ def get_all_subjects(class_name=None):
             '''
             df = pd.read_sql_query(query, conn, params=(class_name,))
             
+            # If no results, try normalized version
             if df.empty:
                 is_valid, normalized_class = validate_class_name(class_name)
                 if is_valid and normalized_class != class_name:
                     df = pd.read_sql_query(query, conn, params=(normalized_class,))
             
+            # If still empty, try case-insensitive match
             if df.empty:
                 query_ci = '''
                     SELECT s.*, t.name as teacher_name
@@ -867,18 +1072,21 @@ def get_all_subjects(class_name=None):
         conn.close()
 
 def assign_subject_to_teacher(subject_id, teacher_id):
+    """Assign a subject to a teacher."""
     conn = get_db_connection()
     c = conn.cursor()
     try:
         c.execute('UPDATE subjects SET teacher_id = ? WHERE subject_id = ?', (teacher_id, subject_id))
         conn.commit()
         return True
-    except:
+    except Exception as e:
+        print(f"Error assigning subject: {e}")
         return False
     finally:
         conn.close()
 
 def register_student_subjects(student_id, subject_ids):
+    """Register student for multiple subjects."""
     conn = get_db_connection()
     c = conn.cursor()
     try:
@@ -896,6 +1104,7 @@ def register_student_subjects(student_id, subject_ids):
         conn.close()
 
 def get_student_subjects(student_id):
+    """Get all subjects a student is registered for."""
     conn = get_db_connection()
     try:
         query = '''
@@ -909,15 +1118,18 @@ def get_student_subjects(student_id):
         '''
         df = pd.read_sql_query(query, conn, params=(student_id,))
         return df
-    except:
+    except Exception as e:
+        print(f"Error getting student subjects: {e}")
         return pd.DataFrame()
     finally:
         conn.close()
 
 def remove_student_subject(student_id, subject_id):
+    """Remove a subject from student's registration."""
     conn = get_db_connection()
     c = conn.cursor()
     try:
+        # First check if the subject exists in student's list
         c.execute('''
             SELECT id FROM student_subjects 
             WHERE student_id = ? AND subject_id = ?
@@ -928,6 +1140,7 @@ def remove_student_subject(student_id, subject_id):
             st.error("Subject not found in your registration.")
             return False
         
+        # Delete the subject registration
         c.execute('''
             DELETE FROM student_subjects 
             WHERE student_id = ? AND subject_id = ?
@@ -1066,6 +1279,7 @@ def add_submission_with_ai(student_id, submission_type, subject, title, descript
     points = get_auto_grade_points(submission_type)
     grade = get_auto_grade_letter(submission_type)
     
+    # Check for duplicate submission
     is_duplicate, duplicate_msg = check_duplicate_submission(student_id, subject, title, description, submission_type)
     if is_duplicate:
         st.error(duplicate_msg)
@@ -1073,8 +1287,9 @@ def add_submission_with_ai(student_id, submission_type, subject, title, descript
     
     ai_result = validate_submission_with_ai(description, subject)
     
+    # Reduce points if duplicate-like content is detected
     if ai_result['plagiarism_score'] > 0.7:
-        ai_result['feedback'] += "\n\n⚠️ **Warning:** High similarity with previous submissions detected."
+        ai_result['feedback'] += "\n\n⚠️ **Warning:** High similarity with previous submissions detected. Future duplicate submissions may be blocked."
     
     adjusted_points = points * ai_result['confidence']
     
@@ -1114,6 +1329,7 @@ def add_submission_with_ai(student_id, submission_type, subject, title, descript
             VALUES (?, 'Auto Graded', ?, ?, ?)
         ''', (student_id, adjusted_points, f"AI-graded: {submission_type} (Conf: {ai_result['confidence']})", submission_id))
 
+        update_daily_activity(student_id, date, 'submission', adjusted_points)
         conn.commit()
         
         st.session_state.submission_review = ai_result
@@ -1142,6 +1358,7 @@ def add_extra_activity(student_id, activity_type, topic, date, duration, remarks
             INSERT INTO point_transactions (student_id, transaction_type, points, description)
             VALUES (?, 'Extra Activity', ?, ?)
         ''', (student_id, points, f"Extra Activity: {topic}"))
+        update_daily_activity(student_id, date, 'activity', points)
         conn.commit()
         return True
     except Exception as e:
@@ -1150,70 +1367,43 @@ def add_extra_activity(student_id, activity_type, topic, date, duration, remarks
     finally:
         conn.close()
 
+def update_daily_activity(student_id, date, activity_type, points=0):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute('SELECT * FROM daily_activity WHERE student_id = ? AND activity_date = ?', (student_id, date))
+        existing = c.fetchone()
+        if existing:
+            if activity_type == 'submission':
+                c.execute('''
+                    UPDATE daily_activity SET submission_count = submission_count + 1,
+                    total_points_earned = total_points_earned + ?
+                    WHERE student_id = ? AND activity_date = ?
+                ''', (points, student_id, date))
+            else:
+                c.execute('''
+                    UPDATE daily_activity SET activity_count = activity_count + 1,
+                    total_points_earned = total_points_earned + ?
+                    WHERE student_id = ? AND activity_date = ?
+                ''', (points, student_id, date))
+        else:
+            if activity_type == 'submission':
+                c.execute('''
+                    INSERT INTO daily_activity (student_id, activity_date, submission_count, total_points_earned)
+                    VALUES (?, ?, 1, ?)
+                ''', (student_id, date, points))
+            else:
+                c.execute('''
+                    INSERT INTO daily_activity (student_id, activity_date, activity_count, total_points_earned)
+                    VALUES (?, ?, 1, ?)
+                ''', (student_id, date, points))
+        conn.commit()
+    except:
+        pass
+    finally:
+        conn.close()
+
 # ---------- Query Functions ----------
-def get_all_students():
-    conn = get_db_connection()
-    try:
-        df = pd.read_sql_query('''
-            SELECT student_id, reg_no, name, class, email, phone, total_points,
-                   current_streak, best_streak, last_active
-            FROM students ORDER BY total_points DESC
-        ''', conn)
-        return df
-    except:
-        return pd.DataFrame()
-    finally:
-        conn.close()
-
-def get_student_submissions(student_id):
-    conn = get_db_connection()
-    try:
-        df = pd.read_sql_query('''
-            SELECT submission_id, submission_type, subject, title, description, date, status,
-                   points_earned, max_points, grade, teacher_feedback, graded_at,
-                   file_path, file_name, file_type, file_size,
-                   ai_confidence, ai_feedback, plagiarism_score
-            FROM submissions WHERE student_id = ? ORDER BY date DESC
-        ''', conn, params=(student_id,))
-        return df
-    except:
-        return pd.DataFrame()
-    finally:
-        conn.close()
-
-def get_all_submissions_for_teacher():
-    conn = get_db_connection()
-    try:
-        df = pd.read_sql_query('''
-            SELECT s.submission_id, s.submission_type, s.subject, s.title, s.date,
-                   s.file_path, s.file_name, s.file_type, s.file_size,
-                   s.ai_confidence, s.ai_feedback, s.plagiarism_score,
-                   st.name as student_name, st.reg_no, st.class
-            FROM submissions s
-            JOIN students st ON s.student_id = st.student_id
-            ORDER BY s.date DESC
-        ''', conn)
-        return df
-    except:
-        return pd.DataFrame()
-    finally:
-        conn.close()
-
-def get_daily_activity(student_id, days=7):
-    conn = get_db_connection()
-    try:
-        df = pd.read_sql_query('''
-            SELECT activity_date, submission_count, activity_count, total_points_earned
-            FROM daily_activity
-            WHERE student_id = ? AND activity_date >= DATE("now", ?)
-            ORDER BY activity_date DESC
-        ''', conn, params=(student_id, f'-{days} days'))
-        return df
-    except:
-        return pd.DataFrame()
-    finally:
-        conn.close()
-
 def get_leaderboard(limit=20, class_filter=None):
     conn = get_db_connection()
     try:
@@ -1230,6 +1420,21 @@ def get_leaderboard(limit=20, class_filter=None):
         df = pd.read_sql_query(query, conn, params=params)
         if not df.empty:
             df.insert(0, 'Rank', range(1, len(df) + 1))
+        return df
+    except:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def get_daily_activity(student_id, days=7):
+    conn = get_db_connection()
+    try:
+        df = pd.read_sql_query('''
+            SELECT activity_date, submission_count, activity_count, total_points_earned
+            FROM daily_activity
+            WHERE student_id = ? AND activity_date >= DATE("now", ?)
+            ORDER BY activity_date DESC
+        ''', conn, params=(student_id, f'-{days} days'))
         return df
     except:
         return pd.DataFrame()
@@ -1261,18 +1466,100 @@ def get_student_progress(student_id):
     finally:
         conn.close()
 
-# ---------- Create uploads directory ----------
+def get_all_students():
+    conn = get_db_connection()
+    try:
+        df = pd.read_sql_query('''
+            SELECT student_id, reg_no, name, class, email, phone, total_points,
+                   current_streak, best_streak, last_active
+            FROM students ORDER BY total_points DESC
+        ''', conn)
+        return df
+    except:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def get_student_submissions(student_id):
+    conn = get_db_connection()
+    try:
+        df = pd.read_sql_query('''
+            SELECT submission_id, submission_type, subject, title, description, date, status,
+                   points_earned, max_points, grade, teacher_feedback, graded_at,
+                   file_path, file_name, file_type, file_size,
+                   ai_confidence, ai_feedback, plagiarism_score
+            FROM submissions WHERE student_id = ? ORDER BY date DESC
+        ''', conn, params=(student_id,))
+        return df
+    except:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def get_student_activities(student_id):
+    conn = get_db_connection()
+    try:
+        df = pd.read_sql_query('''
+            SELECT activity_id, activity_type, topic, date, duration_minutes, points_earned, remarks,
+                   file_path, file_name
+            FROM activities WHERE student_id = ? ORDER BY date DESC
+        ''', conn, params=(student_id,))
+        return df
+    except:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def get_all_submissions_for_teacher():
+    conn = get_db_connection()
+    try:
+        df = pd.read_sql_query('''
+            SELECT s.submission_id, s.submission_type, s.subject, s.title, s.date,
+                   s.file_path, s.file_name, s.file_type, s.file_size,
+                   s.ai_confidence, s.ai_feedback, s.plagiarism_score,
+                   st.name as student_name, st.reg_no, st.class
+            FROM submissions s
+            JOIN students st ON s.student_id = st.student_id
+            ORDER BY s.date DESC
+        ''', conn)
+        return df
+    except:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def delete_student(student_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        c.execute('DELETE FROM submissions WHERE student_id = ?', (student_id,))
+        c.execute('DELETE FROM activities WHERE student_id = ?', (student_id,))
+        c.execute('DELETE FROM daily_activity WHERE student_id = ?', (student_id,))
+        c.execute('DELETE FROM rewards WHERE student_id = ?', (student_id,))
+        c.execute('DELETE FROM point_transactions WHERE student_id = ?', (student_id,))
+        c.execute('DELETE FROM student_subjects WHERE student_id = ?', (student_id,))
+        c.execute('DELETE FROM students WHERE student_id = ?', (student_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting student: {str(e)}")
+        return False
+    finally:
+        conn.close()
+
+# ---------- Initialise ----------
+# Create uploads directory
 Path("uploads").mkdir(exist_ok=True)
 
 # ==================== STREAMLIT UI ====================
 st.title("📚 Continuous Student Evaluation & Monitoring System")
 st.markdown("---")
 
-# Show sklearn availability warning
+# Show sklearn availability warning if needed
 if not SKLEARN_AVAILABLE:
     st.sidebar.warning("⚠️ Advanced AI features limited. Install scikit-learn for full functionality.")
 
-# Show database location
+# Show database info in debug expander
 with st.sidebar.expander("🔧 System Info", expanded=False):
     st.write(f"📁 Database location: `{DB_PATH}`")
     st.write(f"📊 Database exists: {os.path.exists(DB_PATH)}")
@@ -1298,6 +1585,7 @@ with st.sidebar:
         if st.session_state.user_role == "student":
             student = st.session_state.current_student
             if student:
+                # Get column names for safe indexing
                 conn = get_db_connection()
                 c = conn.cursor()
                 c.execute("PRAGMA table_info(students)")
@@ -1320,6 +1608,11 @@ with st.sidebar:
                 st.session_state.user_role = None
                 st.session_state.logged_in = False
                 st.session_state.page = "Welcome"
+                # Reset footer tabs
+                st.session_state.show_privacy = False
+                st.session_state.show_terms = False
+                st.session_state.show_contact = False
+                st.session_state.show_deletion = False
                 st.rerun()
         elif st.session_state.user_role == "teacher":
             teacher = st.session_state.current_teacher
@@ -1340,6 +1633,11 @@ with st.sidebar:
                 st.session_state.user_role = None
                 st.session_state.logged_in = False
                 st.session_state.page = "Welcome"
+                # Reset footer tabs
+                st.session_state.show_privacy = False
+                st.session_state.show_terms = False
+                st.session_state.show_contact = False
+                st.session_state.show_deletion = False
                 st.rerun()
     else:
         st.header("🔐 Login")
@@ -1353,7 +1651,7 @@ with st.sidebar:
             if login_method == "Email":
                 email = st.text_input("Email", key="student_email")
                 password = st.text_input("Password", type="password", key="student_pass")
-                if st.button("Student Login"):
+                if st.button("Student Login", key="student_login_btn"):
                     if email and password:
                         student = authenticate_student(email, password, use_regno=False)
                         if student:
@@ -1361,13 +1659,18 @@ with st.sidebar:
                             st.session_state.user_role = "student"
                             st.session_state.logged_in = True
                             st.session_state.page = "🏠 Dashboard"
+                            # Reset footer tabs
+                            st.session_state.show_privacy = False
+                            st.session_state.show_terms = False
+                            st.session_state.show_contact = False
+                            st.session_state.show_deletion = False
                             st.rerun()
                         else:
                             st.error("Invalid email or password!")
             else:
                 reg_no = st.text_input("Registration Number", key="student_regno")
                 password = st.text_input("Password", type="password", key="student_pass_reg")
-                if st.button("Student Login"):
+                if st.button("Student Login", key="student_login_reg_btn"):
                     if reg_no and password:
                         student = authenticate_student(reg_no, password, use_regno=True)
                         if student:
@@ -1375,6 +1678,11 @@ with st.sidebar:
                             st.session_state.user_role = "student"
                             st.session_state.logged_in = True
                             st.session_state.page = "🏠 Dashboard"
+                            # Reset footer tabs
+                            st.session_state.show_privacy = False
+                            st.session_state.show_terms = False
+                            st.session_state.show_contact = False
+                            st.session_state.show_deletion = False
                             st.rerun()
                         else:
                             st.error("Invalid registration number or password!")
@@ -1384,7 +1692,7 @@ with st.sidebar:
                 st.write("**Teacher:** test@teacher.com / test123")
             email = st.text_input("Email", key="teacher_email")
             password = st.text_input("Password", type="password", key="teacher_pass")
-            if st.button("Teacher Login"):
+            if st.button("Teacher Login", key="teacher_login_btn"):
                 if email and password:
                     teacher = authenticate_teacher(email, password)
                     if teacher:
@@ -1392,6 +1700,11 @@ with st.sidebar:
                         st.session_state.user_role = "teacher"
                         st.session_state.logged_in = True
                         st.session_state.page = "🏠 Teacher Dashboard"
+                        # Reset footer tabs
+                        st.session_state.show_privacy = False
+                        st.session_state.show_terms = False
+                        st.session_state.show_contact = False
+                        st.session_state.show_deletion = False
                         st.rerun()
                     else:
                         st.error("Invalid email or password!")
@@ -1402,6 +1715,7 @@ with st.sidebar:
                 fp_email = st.text_input("Enter your registered email", key="fp_email").strip()
                 fp_user_type = st.selectbox("I am a", ["Student", "Teacher"], key="fp_type")
                 submitted = st.form_submit_button("Reset Password")
+
                 if submitted:
                     if not fp_email:
                         st.error("Please enter your email address.")
@@ -1410,9 +1724,37 @@ with st.sidebar:
                         if success:
                             st.success("✅ Password reset successfully!")
                             st.info(f"🔑 **Your temporary password is:** `{result}`")
-                            st.warning("Please copy this password and use it to log in.")
+                            st.warning("Please copy this password and use it to log in. You can change it after logging in.")
                         else:
                             st.error(f"❌ {result}")
+
+        with st.expander("🔧 Debug"):
+            if st.button("🚀 Direct Login as Test Student"):
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("SELECT * FROM students WHERE email = ?", ("test@student.com",))
+                student = c.fetchone()
+                conn.close()
+                if student:
+                    st.session_state.current_student = student
+                    st.session_state.user_role = "student"
+                    st.session_state.logged_in = True
+                    st.session_state.page = "🏠 Dashboard"
+                    st.rerun()
+                else:
+                    st.error("Test student not found.")
+            if st.button("🔑 Show Stored Hashes"):
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("SELECT email, password FROM students WHERE email='test@student.com'")
+                s = c.fetchone()
+                c.execute("SELECT email, password FROM teachers WHERE email='test@teacher.com'")
+                t = c.fetchone()
+                conn.close()
+                if s:
+                    st.write(f"Student hash: {s[1]}")
+                if t:
+                    st.write(f"Teacher hash: {t[1]}")
 
     st.markdown("---")
     if st.session_state.user_role:
@@ -1426,6 +1768,11 @@ with st.sidebar:
                 ])
                 if selected != st.session_state.page:
                     st.session_state.page = selected
+                    # Reset footer tabs when navigating
+                    st.session_state.show_privacy = False
+                    st.session_state.show_terms = False
+                    st.session_state.show_contact = False
+                    st.session_state.show_deletion = False
                     st.rerun()
             else:
                 st.radio("Go to:", [
@@ -1444,16 +1791,21 @@ with st.sidebar:
             ])
             if selected != st.session_state.page:
                 st.session_state.page = selected
+                # Reset footer tabs when navigating
+                st.session_state.show_privacy = False
+                st.session_state.show_terms = False
+                st.session_state.show_contact = False
+                st.session_state.show_deletion = False
                 st.rerun()
     else:
         if st.session_state.page != "Welcome":
             st.session_state.page = "Welcome"
 
-# ========== MAIN CONTENT ==========
+# ========== WELCOME PAGE ==========
 if st.session_state.page == "Welcome":
     st.header("Welcome to Student Evaluation System")
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.subheader("📝 Student Registration")
         st.write("- Register with email and password")
@@ -1463,7 +1815,7 @@ if st.session_state.page == "Welcome":
         st.write("- Duplicate submission prevention")
         st.write("- Track your progress")
         st.info("Class name examples: BCA VI, BA II, BCom I, MCA III")
-        
+
         with st.expander("New Student Registration"):
             with st.form("new_student_form"):
                 reg_no = st.text_input("Registration Number*")
@@ -1473,7 +1825,7 @@ if st.session_state.page == "Welcome":
                 phone = st.text_input("Phone")
                 password = st.text_input("Password*", type="password")
                 confirm_password = st.text_input("Confirm Password*", type="password")
-                
+
                 if st.form_submit_button("Register"):
                     if reg_no and name and class_name and email and password:
                         if password == confirm_password:
@@ -1486,7 +1838,7 @@ if st.session_state.page == "Welcome":
                             st.error("Passwords do not match!")
                     else:
                         st.error("Please fill all required fields (*)")
-    
+
     with col2:
         st.subheader("👨‍🏫 Teacher Registration")
         st.write("- Register with email and password")
@@ -1494,7 +1846,8 @@ if st.session_state.page == "Welcome":
         st.write("- Assign subjects to yourself")
         st.write("- Monitor student performance")
         st.write("- Manage AI reference answers")
-        
+        st.write("- View duplicate submission reports")
+
         with st.expander("Teacher Registration"):
             with st.form("teacher_reg_form"):
                 t_code = st.text_input("Teacher Code*")
@@ -1503,7 +1856,7 @@ if st.session_state.page == "Welcome":
                 t_password = st.text_input("Password*", type="password")
                 t_confirm = st.text_input("Confirm Password*", type="password")
                 t_dept = st.text_input("Department*", placeholder="e.g., History, Mathematics, Computer Science")
-                
+
                 if st.form_submit_button("Register as Teacher"):
                     if all([t_code, t_name, t_email, t_password, t_confirm, t_dept]):
                         if t_password == t_confirm:
@@ -1517,14 +1870,1134 @@ if st.session_state.page == "Welcome":
                     else:
                         st.error("Please fill all fields")
 
+# ========== STUDENT SECTION ==========
+elif st.session_state.user_role == "student":
+    student = st.session_state.current_student
+    if not student:
+        st.error("Please login first!")
+        st.stop()
+
+    # Get column names for this student
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(students)")
+    columns = [col[1] for col in c.fetchall()]
+    conn.close()
+    student_dict = dict(zip(columns, student))
+    student_id = student_dict['student_id']
+    student_reg = student_dict['reg_no']
+    student_name = student_dict['name']
+    student_class = student_dict['class']
+    student_email = student_dict['email']
+    student_phone = student_dict['phone']
+    total_points = student_dict['total_points']
+    current_streak = student_dict['current_streak']
+    best_streak = student_dict['best_streak']
+    
+    if st.session_state.page == "edit_registration":
+        st.header("✏️ Edit Your Registration Details")
+        st.info("Update your personal information below. Registration number cannot be changed.")
+        st.info("Class examples: BCA VI, BA II, BCom I, MCA III")
+        
+        with st.form("edit_registration_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.text_input("Registration Number", value=student_reg, disabled=True)
+                name = st.text_input("Full Name*", value=student_name)
+                class_name = st.text_input("Class*", value=student_class, 
+                                          placeholder="e.g., BCA VI, BA II, BCom I")
+            with col2:
+                st.info("Your registration number is permanent and cannot be changed.")
+                email = st.text_input("Email*", value=student_email if student_email else "")
+                phone = st.text_input("Phone", value=student_phone if student_phone else "")
+            
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.form_submit_button("💾 Save Changes", type="primary"):
+                    if name and class_name and email:
+                        if edit_student_registration(student_id, name, class_name, email, phone):
+                            st.success("✅ Registration details updated successfully!")
+                            st.session_state.page = "🏠 Dashboard"
+                            st.rerun()
+                    else:
+                        st.error("Please fill all required fields (*)")
+            with col2:
+                if st.form_submit_button("↩️ Cancel"):
+                    st.session_state.page = "🏠 Dashboard"
+                    st.rerun()
+        
+        st.info("📚 Note: Changing your class may affect which subjects are available to you. You can manage your subject registrations in the 'My Subjects' page.")
+        
+    elif st.session_state.page == "🏠 Dashboard":
+        st.header(f"Welcome back, {student_name}! 👋")
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Points", total_points, "🏆")
+        with col2:
+            st.metric("Current Streak", f"{current_streak} days", "🔥")
+        with col3:
+            st.metric("Best Streak", f"{best_streak} days", "⭐")
+        with col4:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('SELECT COUNT(*) FROM submissions WHERE student_id = ?', (student_id,))
+            total_subs = c.fetchone()[0] or 0
+            conn.close()
+            st.metric("Total Submissions", total_subs, "📝")
+
+        st.markdown("---")
+
+        st.subheader("📚 Your Registered Subjects")
+        subjects_df = get_student_subjects(student_id)
+        if not subjects_df.empty:
+            st.dataframe(subjects_df[['subject_code', 'subject_name', 'teacher_name']], use_container_width=True)
+        else:
+            st.info("You haven't registered for any subjects yet. Go to 'My Subjects' to register!")
+
+        progress = get_student_progress(student_id)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📊 Submission Progress")
+            st.metric("Total Submissions", progress['total_submissions'])
+            st.metric("Submission Points", progress['submission_points'])
+        with col2:
+            st.subheader("🎯 Activity Progress")
+            st.metric("Total Activities", progress['total_activities'])
+            st.metric("Activity Points", progress['activity_points'])
+
+        st.subheader("📅 Recent Activity (Last 7 Days)")
+        daily_activity = get_daily_activity(student_id, 7)
+        if not daily_activity.empty:
+            st.dataframe(daily_activity, use_container_width=True)
+        else:
+            st.info("No recent activity found. Start submitting!")
+
+        if st.session_state.submission_review:
+            with st.expander("📊 Latest AI Submission Analysis", expanded=True):
+                review = st.session_state.submission_review
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("AI Confidence", f"{review['confidence']*100:.0f}%")
+                with col2:
+                    st.metric("Originality Score", f"{(1-review['plagiarism_score'])*100:.0f}%")
+                with col3:
+                    st.metric("Quality Score", f"{review['quality_score']*100:.0f}%")
+                st.info(f"📝 **AI Feedback:**\n{review['feedback']}")
+
+    # My Subjects - SIMPLIFIED VERSION
+    elif st.session_state.page == "📚 My Subjects":
+        st.header("📚 Subject Registration")
+        tab1, tab2 = st.tabs(["➕ Register New Subjects", "📋 My Registered Subjects"])
+
+        with tab1:
+            st.subheader(f"Available Subjects for {student_class}")
+            available_subjects = get_all_subjects(student_class)
+
+            if not available_subjects.empty:
+                registered_df = get_student_subjects(student_id)
+                registered_ids = registered_df['subject_id'].tolist() if not registered_df.empty else []
+                
+                # Filter out already registered subjects
+                available_for_registration = available_subjects[~available_subjects['subject_id'].isin(registered_ids)]
+                
+                if not available_for_registration.empty:
+                    # SIMPLE CHECKBOX INTERFACE
+                    st.write("Select subjects to register:")
+                    
+                    # Create a simple checkbox for each subject
+                    subjects_to_register = []
+                    for idx, row in available_for_registration.iterrows():
+                        teacher_info = f" (Teacher: {row['teacher_name']})" if row['teacher_name'] else ""
+                        checkbox_label = f"📘 {row['subject_code']} - {row['subject_name']}{teacher_info}"
+                        if st.checkbox(checkbox_label, key=f"reg_{row['subject_id']}"):
+                            subjects_to_register.append(row['subject_id'])
+                    
+                    if subjects_to_register:
+                        if st.button("✅ Register Selected Subjects", type="primary"):
+                            if register_student_subjects(student_id, subjects_to_register):
+                                st.success(f"✅ Successfully registered for {len(subjects_to_register)} subjects!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to register subjects.")
+                else:
+                    st.info("You have already registered for all available subjects in your class!")
+            else:
+                st.info("No subjects available for your class yet. Please check with your teachers.")
+
+        with tab2:
+            st.subheader("Your Registered Subjects")
+            subjects_df = get_student_subjects(student_id)
+            if not subjects_df.empty:
+                # Display registered subjects in a clean table
+                st.dataframe(subjects_df[['subject_code', 'subject_name', 'teacher_name', 'registration_date']],
+                           use_container_width=True)
+                
+                # SIMPLE REMOVE INTERFACE
+                st.markdown("---")
+                st.subheader("Remove Subjects")
+                
+                # Create a selectbox for subjects to remove
+                if len(subjects_df) > 0:
+                    subject_options = {}
+                    for _, row in subjects_df.iterrows():
+                        subject_options[f"{row['subject_code']} - {row['subject_name']}"] = row['subject_id']
+                    
+                    selected_subject_display = st.selectbox(
+                        "Select subject to remove:",
+                        options=list(subject_options.keys())
+                    )
+                    
+                    if selected_subject_display:
+                        subject_id = subject_options[selected_subject_display]
+                        
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            if st.button("🗑️ Remove Subject", type="secondary"):
+                                if remove_student_subject(student_id, subject_id):
+                                    st.success(f"✅ Removed {selected_subject_display} successfully!")
+                                    st.rerun()
+                        with col2:
+                            st.caption("⚠️ This action cannot be undone.")
+            else:
+                st.info("You haven't registered for any subjects yet.")
+
+    # New Submission with AI
+    elif st.session_state.page == "➕ New Submission":
+        st.header("New Submission - AI Powered!")
+        if not SKLEARN_AVAILABLE:
+            st.warning("⚠️ Running in basic mode. Install scikit-learn for advanced AI features.")
+        st.info("✅ Your submission will be analyzed by AI for quality and originality. Duplicate submissions will be blocked.")
+
+        subjects_df = get_student_subjects(student_id)
+        if subjects_df.empty:
+            st.warning("⚠️ Please register for subjects first before submitting assignments!")
+            st.info("Go to 'My Subjects' to register for subjects.")
+        else:
+            with st.form("submission_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    subject_list = subjects_df['subject_name'].tolist()
+                    selected_subject = st.selectbox("Subject*", subject_list)
+                    submission_type = st.selectbox("Submission Type*",
+                        ["Daily Homework", "Weekly Assignment", "Monthly Assignment",
+                         "Seminar", "Project", "Research Paper", "Lab Report"])
+                    title = st.text_input("Title*")
+                    date = st.date_input("Date*", datetime.now().date())
+                with col2:
+                    base_points = get_auto_grade_points(submission_type)
+                    st.info(f"📊 Base points: **{base_points}**")
+                    st.info("🤖 AI will adjust points based on quality")
+                    st.info("🔄 Duplicate submissions will be detected automatically")
+
+                description = st.text_area("Description*", height=200, 
+                    placeholder="Write your detailed submission here... The AI will analyze your content for quality, relevance, and originality.")
+
+                uploaded_file = st.file_uploader("Upload File (optional)",
+                    type=['pdf', 'docx', 'txt', 'jpg', 'png', 'zip', 'py', 'java', 'cpp'])
+
+                if st.form_submit_button("Submit", type="primary"):
+                    if title and description:
+                        file_path = None
+                        file_name = None
+                        file_type = None
+                        file_size = None
+
+                        if uploaded_file:
+                            upload_dir = Path("uploads") / student_reg / "submissions"
+                            upload_dir.mkdir(parents=True, exist_ok=True)
+                            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                            file_name = f"{timestamp}_{uploaded_file.name}"
+                            file_path = str(upload_dir / file_name)
+                            file_type = uploaded_file.type
+                            file_size = uploaded_file.size
+
+                            with open(file_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+
+                        submission_id = add_submission_with_ai(student_id, submission_type, selected_subject,
+                                                              title, description, date,
+                                                              file_path, file_name, file_type, file_size)
+                        if submission_id:
+                            st.success("✅ Submission recorded! AI analysis complete.")
+                            st.balloons()
+                            st.rerun()
+                        else:
+                            # Error already shown by the function
+                            pass
+                    else:
+                        st.error("Please fill all required fields (*)")
+
+    # Extra Activity
+    elif st.session_state.page == "➕ Extra Activity":
+        st.header("Add Extra Activity")
+        st.success("🎯 Extra Activities earn **25 points** each!")
+
+        with st.form("extra_activity_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                activity_type = st.selectbox("Activity Type",
+                    ["Workshop", "Sports", "Cultural", "Competition",
+                     "Volunteer", "Club Meeting", "Guest Lecture", "Other"])
+                topic = st.text_input("Topic*")
+                date = st.date_input("Activity Date*", datetime.now().date())
+            with col2:
+                duration = st.number_input("Duration (minutes)", min_value=1, value=60)
+                remarks = st.text_area("Remarks")
+                uploaded_file = st.file_uploader("Upload Supporting Document",
+                    type=['pdf', 'docx', 'txt', 'jpg', 'png', 'zip'])
+
+            if st.form_submit_button("Add Activity"):
+                if topic:
+                    file_path = None
+                    file_name = None
+
+                    if uploaded_file:
+                        upload_dir = Path("uploads") / student_reg / "activities"
+                        upload_dir.mkdir(parents=True, exist_ok=True)
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        file_name = f"{timestamp}_{uploaded_file.name}"
+                        file_path = str(upload_dir / file_name)
+
+                        with open(file_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+
+                    if add_extra_activity(student_id, activity_type, topic, date, duration, remarks, file_path, file_name):
+                        st.success("✅ Activity added! You earned 25 points!")
+                        st.balloons()
+                        st.rerun()
+                else:
+                    st.error("Please enter topic")
+
+    # My Submissions
+    elif st.session_state.page == "📋 My Submissions":
+        st.header("My Submissions")
+        df = get_student_submissions(student_id)
+
+        if not df.empty:
+            total_subs = len(df)
+            total_pts = df['points_earned'].sum()
+            avg_pts = df['points_earned'].mean()
+            avg_confidence = df['ai_confidence'].mean()
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Submissions", total_subs)
+            with col2:
+                st.metric("Total Points", total_pts)
+            with col3:
+                st.metric("Avg Points", f"{avg_pts:.1f}")
+            with col4:
+                st.metric("Avg AI Confidence", f"{avg_confidence*100:.0f}%")
+
+            for idx, row in df.iterrows():
+                with st.expander(f"📄 {row['title']} - {row['date']} (Grade: {row['grade']}, Points: {row['points_earned']})"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Subject:** {row['subject']}")
+                        st.write(f"**Type:** {row['submission_type']}")
+                        st.write(f"**Description:** {row['description']}")
+                    with col2:
+                        st.write(f"**Status:** {row['status']}")
+                        st.write(f"**Submitted:** {row['date']}")
+                        if row['teacher_feedback']:
+                            st.write(f"**Teacher Feedback:** {row['teacher_feedback']}")
+                    
+                    if row['ai_confidence'] > 0:
+                        st.markdown("---")
+                        st.write("**🤖 AI Analysis:**")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("AI Confidence", f"{row['ai_confidence']*100:.0f}%")
+                        with col2:
+                            st.metric("Originality", f"{(1-row['plagiarism_score'])*100:.0f}%")
+                        if row['ai_feedback']:
+                            st.info(f"📝 **AI Feedback:**\n{row['ai_feedback']}")
+
+                    if row['file_path'] and os.path.exists(row['file_path']):
+                        st.markdown("---")
+                        st.write("**📎 Attached File:**")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            download_link = get_file_download_link(row['file_path'], row['file_name'] or "file")
+                            if download_link:
+                                st.markdown(download_link, unsafe_allow_html=True)
+                        with col2:
+                            if st.button(f"👁️ Preview", key=f"preview_{row['submission_id']}"):
+                                st.session_state.view_file = {
+                                    'path': row['file_path'],
+                                    'name': row['file_name'],
+                                    'type': row['file_type']
+                                }
+
+                    if st.session_state.get('view_file') and st.session_state.view_file['path'] == row['file_path']:
+                        preview = get_file_view_link(
+                            st.session_state.view_file['path'],
+                            st.session_state.view_file['name'],
+                            st.session_state.view_file['type']
+                        )
+                        if preview:
+                            st.markdown("---")
+                            st.write("**📄 Preview:**")
+                            st.markdown(preview, unsafe_allow_html=True)
+        else:
+            st.info("No submissions found.")
+
+    # My Uploads
+    elif st.session_state.page == "📂 My Uploads":
+        st.header("📂 My Uploaded Files")
+
+        tab1, tab2 = st.tabs(["📤 Submissions", "🎯 Activities"])
+
+        with tab1:
+            st.subheader("Submission Files")
+            submissions = get_student_submissions(student_id)
+            files_found = False
+
+            for _, row in submissions.iterrows():
+                if row['file_path'] and os.path.exists(row['file_path']):
+                    files_found = True
+                    with st.container():
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        with col1:
+                            st.write(f"**{row['title']}** ({row['subject']})")
+                            st.write(f"📅 {row['date']} | 📄 {row['file_name']}")
+                        with col2:
+                            download_link = get_file_download_link(row['file_path'], row['file_name'])
+                            if download_link:
+                                st.markdown(download_link, unsafe_allow_html=True)
+                        with col3:
+                            if st.button("👁️ View", key=f"view_sub_{row['submission_id']}"):
+                                preview = get_file_view_link(row['file_path'], row['file_name'], row['file_type'])
+                                if preview:
+                                    st.session_state.view_content = preview
+                        st.markdown("---")
+
+            if not files_found:
+                st.info("No files uploaded yet.")
+
+        with tab2:
+            st.subheader("Activity Files")
+            activities = get_student_activities(student_id)
+            files_found = False
+
+            for _, row in activities.iterrows():
+                if row['file_path'] and os.path.exists(row['file_path']):
+                    files_found = True
+                    with st.container():
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        with col1:
+                            st.write(f"**{row['topic']}** ({row['activity_type']})")
+                            st.write(f"📅 {row['date']} | 📄 {row['file_name']}")
+                        with col2:
+                            download_link = get_file_download_link(row['file_path'], row['file_name'])
+                            if download_link:
+                                st.markdown(download_link, unsafe_allow_html=True)
+                        with col3:
+                            if st.button("👁️ View", key=f"view_act_{row['activity_id']}"):
+                                preview = get_file_view_link(row['file_path'], row['file_name'], None)
+                                if preview:
+                                    st.session_state.view_content = preview
+                        st.markdown("---")
+
+            if not files_found:
+                st.info("No activity files uploaded yet.")
+
+        if 'view_content' in st.session_state:
+            st.markdown("---")
+            st.subheader("Preview")
+            st.markdown(st.session_state.view_content, unsafe_allow_html=True)
+            if st.button("Close Preview"):
+                del st.session_state.view_content
+
+    # Daily Activity
+    elif st.session_state.page == "📈 Daily Activity":
+        st.header("Daily Activity Tracker")
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Start Date", datetime.now().date() - timedelta(days=30))
+        with col2:
+            end_date = st.date_input("End Date", datetime.now().date())
+
+        conn = get_db_connection()
+        df = pd.read_sql_query(
+            'SELECT activity_date, submission_count, activity_count, total_points_earned FROM daily_activity WHERE student_id = ? AND activity_date BETWEEN ? AND ? ORDER BY activity_date DESC',
+            conn, params=(student_id, start_date, end_date))
+        conn.close()
+
+        if not df.empty:
+            total_days = len(df)
+            active_days = len(df[df['total_points_earned'] > 0])
+            total_pts = df['total_points_earned'].sum()
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Days", total_days)
+            with col2:
+                st.metric("Active Days", active_days)
+            with col3:
+                st.metric("Total Points", total_pts)
+            st.subheader("📋 Daily Log")
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.info("No activity recorded for the selected period.")
+
+    # Leaderboard
+    elif st.session_state.page == "🏆 Leaderboard":
+        st.header("🏆 Student Leaderboard")
+        col1, col2 = st.columns(2)
+        with col1:
+            conn = get_db_connection()
+            classes_df = pd.read_sql_query("SELECT DISTINCT class FROM students ORDER BY class", conn)
+            conn.close()
+            class_list = ["All Classes"] + classes_df['class'].tolist() if not classes_df.empty else ["All Classes"]
+            class_filter = st.selectbox("Filter by Class", class_list)
+        with col2:
+            limit = st.slider("Top N Students", 5, 50, 20)
+
+        leaderboard = get_leaderboard(limit, class_filter)
+
+        if not leaderboard.empty:
+            st.subheader("📊 Full Leaderboard")
+            display_df = leaderboard[['Rank', 'name', 'class', 'total_points', 'current_streak', 'best_streak', 'submissions_total', 'activities_count']]
+            display_df.columns = ['Rank', 'Name', 'Class', 'Total Points', 'Current Streak', 'Best Streak', 'Submissions', 'Activities']
+            st.dataframe(display_df, use_container_width=True)
+
+            current_rank = leaderboard[leaderboard['reg_no'] == student_reg]['Rank'].values
+            if len(current_rank) > 0:
+                st.info(f"🏅 Your current rank: **#{current_rank[0]}** with **{total_points} points**")
+        else:
+            st.info("No students found in the leaderboard.")
+
+    # Rewards
+    elif st.session_state.page == "🎁 Rewards":
+        st.header("🎁 Reward Store")
+        st.info(f"💰 You have **{total_points} points** available")
+
+        rewards = [
+            {"name": "📚 Book Voucher", "cost": 50, "description": "Get a voucher for academic books"},
+            {"name": "🎮 Game Time", "cost": 30, "description": "Extra 2 hours of gaming time"},
+            {"name": "🍕 Pizza Party", "cost": 100, "description": "Pizza party for your class"},
+            {"name": "🏆 Trophy", "cost": 200, "description": "Custom achievement trophy"},
+            {"name": "📱 Tech Gadget", "cost": 500, "description": "Latest tech gadget"},
+            {"name": "🎉 Celebration", "cost": 80, "description": "Class celebration party"},
+            {"name": "⭐ Star Badge", "cost": 20, "description": "Special recognition badge"},
+            {"name": "📝 Extra Credit", "cost": 40, "description": "5% extra credit on next assignment"},
+        ]
+
+        cols = st.columns(2)
+        for i, reward in enumerate(rewards):
+            with cols[i % 2]:
+                st.markdown(f"### {reward['name']}")
+                st.markdown(f"**Cost:** {reward['cost']} points")
+                st.markdown(reward['description'])
+                if total_points >= reward['cost']:
+                    if st.button(f"Claim {reward['name']}", key=f"claim_{i}"):
+                        conn = get_db_connection()
+                        c = conn.cursor()
+                        c.execute('UPDATE students SET total_points = total_points - ? WHERE student_id = ?', (reward['cost'], student_id))
+                        c.execute('INSERT INTO rewards (student_id, reward_type, points_cost, reward_date, status) VALUES (?, ?, ?, DATE("now"), "Claimed")', (student_id, reward['name'], reward['cost']))
+                        c.execute('INSERT INTO point_transactions (student_id, transaction_type, points, description) VALUES (?, "Reward Claimed", ?, ?)', (student_id, -reward['cost'], f"Claimed: {reward['name']}"))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"🎉 You claimed {reward['name']}!")
+                        st.rerun()
+                else:
+                    st.warning(f"Need {reward['cost'] - total_points} more points")
+                st.markdown("---")
+
+    # Edit Profile
+    elif st.session_state.page == "👤 Edit Profile":
+        st.header("Edit Profile")
+        with st.form("edit_profile_form"):
+            name = st.text_input("Full Name", value=student_name)
+            email = st.text_input("Email", value=student_email if student_email else "")
+            phone = st.text_input("Phone", value=student_phone if student_phone else "")
+            st.subheader("Change Password (Optional)")
+            new_password = st.text_input("New Password", type="password")
+            confirm_password = st.text_input("Confirm New Password", type="password")
+            if st.form_submit_button("Update Profile"):
+                if new_password:
+                    if new_password == confirm_password:
+                        if update_student_profile(student_id, name, email, phone, new_password):
+                            st.success("✅ Profile updated successfully! Please login again.")
+                            st.session_state.current_student = None
+                            st.session_state.current_teacher = None
+                            st.session_state.user_role = None
+                            st.session_state.logged_in = False
+                            st.session_state.page = "Welcome"
+                            st.rerun()
+                    else:
+                        st.error("Passwords do not match!")
+                else:
+                    if update_student_profile(student_id, name, email, phone):
+                        st.success("✅ Profile updated successfully!")
+                        student = list(student)
+                        # Update session with new values
+                        student[2] = name
+                        student[4] = email
+                        student[5] = phone
+                        st.session_state.current_student = tuple(student)
+                        st.rerun()
+
+# ========== TEACHER SECTION ==========
+elif st.session_state.user_role == "teacher":
+    teacher = st.session_state.current_teacher
+    if not teacher:
+        st.error("Please login first!")
+        st.stop()
+
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(teachers)")
+    columns = [col[1] for col in c.fetchall()]
+    conn.close()
+    teacher_dict = dict(zip(columns, teacher))
+    teacher_id = teacher_dict['teacher_id']
+    teacher_name = teacher_dict['name']
+    teacher_email = teacher_dict['email']
+    teacher_dept = teacher_dict['department']
+
+    if st.session_state.page == "🏠 Teacher Dashboard":
+        st.header(f"Teacher Dashboard 👨‍🏫")
+        conn = get_db_connection()
+        try:
+            total_students = pd.read_sql_query("SELECT COUNT(*) FROM students", conn).iloc[0,0] or 0
+            total_submissions = pd.read_sql_query("SELECT COUNT(*) FROM submissions", conn).iloc[0,0] or 0
+            total_points = pd.read_sql_query("SELECT SUM(total_points) FROM students", conn).iloc[0,0] or 0
+            total_subjects = pd.read_sql_query("SELECT COUNT(*) FROM subjects WHERE teacher_id = ?", conn, params=(teacher_id,)).iloc[0,0] or 0
+        except:
+            total_students = 0
+            total_submissions = 0
+            total_points = 0
+            total_subjects = 0
+        finally:
+            conn.close()
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Students", total_students)
+        with col2:
+            st.metric("Total Submissions", total_submissions)
+        with col3:
+            st.metric("Total Points Awarded", total_points)
+        with col4:
+            st.metric("My Subjects", total_subjects)
+
+        st.markdown("---")
+        st.subheader("📚 My Subjects")
+        subjects_df = get_all_subjects()
+        my_subjects = subjects_df[subjects_df['teacher_id'] == teacher_id] if not subjects_df.empty else pd.DataFrame()
+        if not my_subjects.empty:
+            st.dataframe(my_subjects[['subject_code', 'subject_name', 'class']], use_container_width=True)
+        else:
+            st.info("You haven't been assigned any subjects yet.")
+
+        st.subheader("📊 Class Distribution")
+        conn = get_db_connection()
+        class_dist = pd.read_sql_query("SELECT class, COUNT(*) as count FROM students GROUP BY class", conn)
+        conn.close()
+        if not class_dist.empty:
+            st.dataframe(class_dist, use_container_width=True)
+
+    # Subject Management (FIXED VERSION)
+    elif st.session_state.page == "📚 Subject Management":
+        st.header("📚 Subject Management")
+        st.info("Enter class names in standard format (e.g., BCA VI, BA II, BCom I)")
+        
+        tab1, tab2, tab3 = st.tabs(["➕ Create Subject", "📋 My Subjects", "👥 Assign Teachers"])
+
+        with tab1:
+            st.subheader("Create New Subject")
+            with st.form("create_subject_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    subject_code = st.text_input("Subject Code*", placeholder="e.g., MATH101, CS202")
+                    subject_name = st.text_input("Subject Name*", placeholder="e.g., Calculus, Programming")
+                with col2:
+                    class_name = st.text_input("Class*", placeholder="e.g., BCA VI, BA II")
+                    assign_to_self = st.checkbox("Assign this subject to me")
+                
+                if st.form_submit_button("Create Subject"):
+                    if subject_code and subject_name and class_name:
+                        teacher_id_to_assign = teacher_id if assign_to_self else None
+                        add_subject(subject_code, subject_name, class_name, teacher_id_to_assign)
+                        # No rerun here - error/success message handled in function
+                    else:
+                        st.error("Please fill all required fields (*)")
+
+        with tab2:
+            st.subheader("Subjects I Teach")
+            subjects_df = get_all_subjects()
+            my_subjects = subjects_df[subjects_df['teacher_id'] == teacher_id] if not subjects_df.empty else pd.DataFrame()
+            
+            if not my_subjects.empty:
+                # Display subjects in a table
+                st.dataframe(my_subjects[['subject_code', 'subject_name', 'class', 'created_at']],
+                           use_container_width=True)
+                
+                # Subject removal section
+                st.markdown("---")
+                st.subheader("🗑️ Delete Subjects")
+                st.warning("⚠️ Deleting a subject will also remove all student registrations for that subject.")
+                
+                # Select subject to delete
+                subject_options = {}
+                for _, row in my_subjects.iterrows():
+                    subject_options[f"{row['subject_code']} - {row['subject_name']} ({row['class']})"] = row['subject_id']
+                
+                if subject_options:
+                    selected_subject = st.selectbox("Select subject to delete:", list(subject_options.keys()))
+                    
+                    if selected_subject:
+                        subject_id = subject_options[selected_subject]
+                        
+                        # Check if subject has students
+                        conn = get_db_connection()
+                        c = conn.cursor()
+                        c.execute("SELECT COUNT(*) FROM student_subjects WHERE subject_id = ?", (subject_id,))
+                        student_count = c.fetchone()[0]
+                        conn.close()
+                        
+                        if student_count > 0:
+                            st.warning(f"⚠️ This subject has {student_count} student(s) registered.")
+                        
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            if st.button("🗑️ Delete Subject", type="secondary"):
+                                if delete_subject(subject_id):
+                                    st.rerun()
+                        with col2:
+                            st.caption("This action cannot be undone.")
+            else:
+                st.info("You haven't been assigned any subjects yet.")
+
+        with tab3:
+            st.subheader("Assign Subjects to Teachers")
+            teachers_df = get_all_teachers()
+            subjects_df = get_all_subjects()
+            unassigned_subjects = subjects_df[pd.isna(subjects_df['teacher_id'])] if not subjects_df.empty else pd.DataFrame()
+
+            if not teachers_df.empty and not unassigned_subjects.empty:
+                col1, col2 = st.columns(2)
+                with col1:
+                    selected_teacher = st.selectbox(
+                        "Select Teacher",
+                        options=teachers_df['teacher_id'].tolist(),
+                        format_func=lambda x: teachers_df[teachers_df['teacher_id'] == x]['name'].iloc[0]
+                    )
+                with col2:
+                    selected_subject = st.selectbox(
+                        "Select Subject to Assign",
+                        options=unassigned_subjects['subject_id'].tolist(),
+                        format_func=lambda x: f"{unassigned_subjects[unassigned_subjects['subject_id'] == x]['subject_code'].iloc[0]} - {unassigned_subjects[unassigned_subjects['subject_id'] == x]['subject_name'].iloc[0]}"
+                    )
+                if st.button("Assign Subject"):
+                    if assign_subject_to_teacher(selected_subject, selected_teacher):
+                        st.success("✅ Subject assigned successfully!")
+                        st.rerun()
+            else:
+                if teachers_df.empty:
+                    st.info("No teachers available for assignment.")
+                if unassigned_subjects.empty:
+                    st.info("No unassigned subjects available.")
+
+    # Manage Students (with Faculty Edit)
+    elif st.session_state.page == "👨‍🎓 Manage Students":
+        st.header("Manage Students")
+        st.info("👨‍🏫 Faculty: You can edit all student details including registration number and password.")
+        
+        students_df = get_all_students()
+        if not students_df.empty:
+            st.subheader("All Students")
+            st.dataframe(students_df[['reg_no', 'name', 'class', 'email', 'phone', 'total_points']],
+                        use_container_width=True)
+            
+            st.markdown("---")
+            st.subheader("Edit Student Details (Faculty)")
+            st.info("Class name examples: BCA VI, BA II, BCom I")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                student_list = students_df['reg_no'].tolist()
+                selected_reg = st.selectbox("Select Student by Registration Number", student_list)
+                
+                if selected_reg:
+                    student_data = students_df[students_df['reg_no'] == selected_reg].iloc[0]
+                    student_id = student_data['student_id']
+                    
+                    with st.form("faculty_edit_student_form"):
+                        st.write(f"**Editing: {student_data['name']}**")
+                        reg_no = st.text_input("Registration Number", value=student_data['reg_no'])
+                        name = st.text_input("Name", value=student_data['name'])
+                        class_name = st.text_input("Class", value=student_data['class'],
+                                                  placeholder="e.g., BCA VI, BA II")
+                        email = st.text_input("Email", value=student_data['email'] if student_data['email'] else "")
+                        phone = st.text_input("Phone", value=student_data['phone'] if student_data['phone'] else "")
+                        
+                        st.subheader("Reset Password (Optional)")
+                        new_password = st.text_input("New Password", type="password", 
+                                                    help="Leave blank to keep current password")
+                        
+                        if st.form_submit_button("💾 Update Student"):
+                            if reg_no and name and class_name and email:
+                                if faculty_edit_student(student_id, reg_no, name, class_name, email, phone, 
+                                                      new_password if new_password else None):
+                                    st.success("Student updated successfully!")
+                                    st.rerun()
+                            else:
+                                st.error("Please fill all required fields")
+            
+            with col2:
+                if 'selected_reg' in locals() and selected_reg:
+                    student_data = students_df[students_df['reg_no'] == selected_reg].iloc[0]
+                    st.subheader("Student Details")
+                    st.info(f"**Reg No:** {student_data['reg_no']}")
+                    st.info(f"**Name:** {student_data['name']}")
+                    st.info(f"**Class:** {student_data['class']}")
+                    st.info(f"**Email:** {student_data['email']}")
+                    st.info(f"**Phone:** {student_data['phone']}")
+                    st.info(f"**Total Points:** {student_data['total_points']}")
+                    st.info(f"**Current Streak:** {student_data['current_streak']} days")
+                    
+                    with st.expander("View Registered Subjects"):
+                        subjects = get_student_subjects(student_data['student_id'])
+                        if not subjects.empty:
+                            st.dataframe(subjects[['subject_code', 'subject_name', 'teacher_name']])
+                        else:
+                            st.info("No subjects registered.")
+                    with st.expander("View Student Submissions"):
+                        submissions = get_student_submissions(student_data['student_id'])
+                        if not submissions.empty:
+                            st.dataframe(submissions[['submission_type', 'subject', 'title', 'date', 'grade', 'points_earned']])
+                        else:
+                            st.info("No submissions yet.")
+        else:
+            st.info("No students found.")
+
+    # View Submissions with AI data
+    elif st.session_state.page == "📂 View Submissions":
+        st.header("📂 Student Submissions with AI Analysis")
+
+        submissions_df = get_all_submissions_for_teacher()
+
+        if not submissions_df.empty:
+            col1, col2 = st.columns(2)
+            with col1:
+                class_filter = st.selectbox("Filter by Class", ["All"] + submissions_df['class'].unique().tolist())
+            with col2:
+                subject_filter = st.selectbox("Filter by Subject", ["All"] + submissions_df['subject'].unique().tolist())
+
+            filtered_df = submissions_df.copy()
+            if class_filter != "All":
+                filtered_df = filtered_df[filtered_df['class'] == class_filter]
+            if subject_filter != "All":
+                filtered_df = filtered_df[filtered_df['subject'] == subject_filter]
+
+            st.write(f"**Total Submissions:** {len(filtered_df)}")
+
+            for idx, row in filtered_df.iterrows():
+                with st.expander(f"📄 {row['title']} - {row['student_name']} ({row['date']})"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Student:** {row['student_name']} ({row['reg_no']})")
+                        st.write(f"**Class:** {row['class']}")
+                        st.write(f"**Subject:** {row['subject']}")
+                        st.write(f"**Type:** {row['submission_type']}")
+                    with col2:
+                        st.write(f"**Date:** {row['date']}")
+                    
+                    if row['ai_confidence'] > 0:
+                        st.markdown("---")
+                        st.write("**🤖 AI Analysis:**")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("AI Confidence", f"{row['ai_confidence']*100:.0f}%")
+                        with col2:
+                            st.metric("Originality", f"{(1-row['plagiarism_score'])*100:.0f}%")
+                        if row['ai_feedback']:
+                            st.info(f"📝 **AI Feedback:**\n{row['ai_feedback']}")
+
+                    if row['file_path'] and os.path.exists(row['file_path']):
+                        st.markdown("---")
+                        st.write("**📎 Attached File:**")
+                        download_link = get_file_download_link(row['file_path'], row['file_name'] or "file")
+                        if download_link:
+                            st.markdown(download_link, unsafe_allow_html=True)
+
+                        if st.button(f"👁️ Preview", key=f"teacher_preview_{row['submission_id']}"):
+                            preview = get_file_view_link(row['file_path'], row['file_name'], row['file_type'])
+                            if preview:
+                                st.session_state.teacher_view = preview
+
+                    if st.session_state.get('teacher_view') and st.button("Close Preview"):
+                        del st.session_state.teacher_view
+
+                    if st.session_state.get('teacher_view'):
+                        st.markdown("---")
+                        st.markdown(st.session_state.teacher_view, unsafe_allow_html=True)
+        else:
+            st.info("No submissions found.")
+
+    # AI Reference Answers Management
+    elif st.session_state.page == "🤖 AI Reference Answers":
+        st.header("🤖 AI Reference Answers Management")
+        if not SKLEARN_AVAILABLE:
+            st.warning("⚠️ scikit-learn not installed. AI similarity features will use basic word matching.")
+        st.info("Add reference answers to help the AI validate student submissions more accurately.")
+        
+        tab1, tab2 = st.tabs(["➕ Add Reference Answer", "📋 View Reference Answers"])
+        
+        with tab1:
+            with st.form("add_reference_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    subject = st.text_input("Subject*", placeholder="e.g., Database Management")
+                    topic = st.text_input("Topic*", placeholder="e.g., SQL Basics")
+                with col2:
+                    st.info("This reference answer will be used by AI to compare student submissions.")
+                
+                answer_text = st.text_area("Reference Answer*", height=200, 
+                    placeholder="Enter a comprehensive reference answer that demonstrates good quality...")
+                
+                if st.form_submit_button("Add Reference Answer"):
+                    if subject and topic and answer_text:
+                        if add_reference_answer(subject, topic, answer_text, teacher_id):
+                            st.success("✅ Reference answer added successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to add reference answer.")
+                    else:
+                        st.error("Please fill all required fields (*)")
+        
+        with tab2:
+            conn = get_db_connection()
+            try:
+                df = pd.read_sql_query('''
+                    SELECT answer_id, subject, topic, answer_text, created_at
+                    FROM reference_answers ORDER BY subject, topic
+                ''', conn)
+                if not df.empty:
+                    for _, row in df.iterrows():
+                        with st.expander(f"📚 {row['subject']} - {row['topic']}"):
+                            st.write(f"**Answer:** {row['answer_text']}")
+                            st.write(f"*Added: {row['created_at']}*")
+                else:
+                    st.info("No reference answers added yet.")
+            except:
+                st.info("No reference answers found.")
+            finally:
+                conn.close()
+
+    # Class Analytics
+    elif st.session_state.page == "📊 Class Analytics":
+        st.header("Class Analytics")
+        conn = get_db_connection()
+        class_performance = pd.read_sql_query('''
+            SELECT class, COUNT(*) as student_count,
+                   AVG(total_points) as avg_points,
+                   MAX(total_points) as max_points,
+                   MIN(total_points) as min_points,
+                   SUM(total_points) as total_points
+            FROM students GROUP BY class ORDER BY avg_points DESC
+        ''', conn)
+        if not class_performance.empty:
+            st.subheader("📈 Class Performance")
+            st.dataframe(class_performance, use_container_width=True)
+
+        st.subheader("🤖 AI Performance Metrics")
+        ai_metrics = pd.read_sql_query('''
+            SELECT 
+                AVG(ai_confidence) as avg_confidence,
+                AVG(plagiarism_score) as avg_plagiarism,
+                COUNT(*) as total_ai_graded
+            FROM submissions WHERE ai_confidence > 0
+        ''', conn)
+        if not ai_metrics.empty and ai_metrics['total_ai_graded'][0] > 0:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Avg AI Confidence", f"{ai_metrics['avg_confidence'][0]*100:.0f}%")
+            with col2:
+                st.metric("Avg Originality", f"{(1-ai_metrics['avg_plagiarism'][0])*100:.0f}%")
+            with col3:
+                st.metric("AI-Graded Submissions", ai_metrics['total_ai_graded'][0])
+
+        st.subheader("📚 Subject-wise Student Distribution")
+        subject_stats = pd.read_sql_query('''
+            SELECT s.subject_code, s.subject_name, s.class,
+                   COUNT(ss.student_id) as student_count,
+                   t.name as teacher_name
+            FROM subjects s
+            LEFT JOIN student_subjects ss ON s.subject_id = ss.subject_id
+            LEFT JOIN teachers t ON s.teacher_id = t.teacher_id
+            GROUP BY s.subject_id
+            ORDER BY student_count DESC
+        ''', conn)
+        if not subject_stats.empty:
+            st.dataframe(subject_stats, use_container_width=True)
+        conn.close()
+
+    # Leaderboard
+    elif st.session_state.page == "🏆 Leaderboard":
+        st.header("Teacher View: Student Leaderboard")
+        leaderboard = get_leaderboard(50)
+        if not leaderboard.empty:
+            st.dataframe(leaderboard, use_container_width=True)
+        else:
+            st.info("No students in leaderboard.")
+
+    # Edit Profile
+    elif st.session_state.page == "👤 Edit Profile":
+        st.header("Edit Profile")
+        with st.form("edit_teacher_profile_form"):
+            name = st.text_input("Full Name", value=teacher_name)
+            email = st.text_input("Email", value=teacher_email)
+            department = st.text_input("Department", value=teacher_dept if teacher_dept else "")
+            st.subheader("Change Password (Optional)")
+            new_password = st.text_input("New Password", type="password")
+            confirm_password = st.text_input("Confirm New Password", type="password")
+            if st.form_submit_button("Update Profile"):
+                if new_password:
+                    if new_password == confirm_password:
+                        if update_teacher_profile(teacher_id, name, email, department, new_password):
+                            st.success("✅ Profile updated successfully! Please login again.")
+                            st.session_state.current_student = None
+                            st.session_state.current_teacher = None
+                            st.session_state.user_role = None
+                            st.session_state.logged_in = False
+                            st.session_state.page = "Welcome"
+                            st.rerun()
+                    else:
+                        st.error("Passwords do not match!")
+                else:
+                    if update_teacher_profile(teacher_id, name, email, department):
+                        st.success("✅ Profile updated successfully!")
+                        teacher = list(teacher)
+                        teacher[2] = name
+                        teacher[3] = email
+                        teacher[5] = department
+                        st.session_state.current_teacher = tuple(teacher)
+                        st.rerun()
+
+    # Manage System (FIXED STATS SECTION)
+    elif st.session_state.page == "⚙️ Manage System":
+        st.header("System Management")
+        tab1, tab2 = st.tabs(["📊 System Stats", "⚙️ Settings"])
+        with tab1:
+            st.subheader("System Statistics")
+            conn = get_db_connection()
+            
+            # Initialize stats with default values
+            stats_data = {
+                "Metric": [],
+                "Value": []
+            }
+            
+            try:
+                total_students = pd.read_sql_query("SELECT COUNT(*) FROM students", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Students")
+                stats_data["Value"].append(total_students)
+            except:
+                stats_data["Metric"].append("Total Students")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_teachers = pd.read_sql_query("SELECT COUNT(*) FROM teachers", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Teachers")
+                stats_data["Value"].append(total_teachers)
+            except:
+                stats_data["Metric"].append("Total Teachers")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_subjects = pd.read_sql_query("SELECT COUNT(*) FROM subjects", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Subjects")
+                stats_data["Value"].append(total_subjects)
+            except:
+                stats_data["Metric"].append("Total Subjects")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_submissions = pd.read_sql_query("SELECT COUNT(*) FROM submissions", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Submissions")
+                stats_data["Value"].append(total_submissions)
+            except:
+                stats_data["Metric"].append("Total Submissions")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_activities = pd.read_sql_query("SELECT COUNT(*) FROM activities", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Activities")
+                stats_data["Value"].append(total_activities)
+            except:
+                stats_data["Metric"].append("Total Activities")
+                stats_data["Value"].append(0)
+                
+            try:
+                total_points = pd.read_sql_query("SELECT SUM(total_points) FROM students", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("Total Points Awarded")
+                stats_data["Value"].append(total_points)
+            except:
+                stats_data["Metric"].append("Total Points Awarded")
+                stats_data["Value"].append(0)
+                
+            try:
+                ai_graded = pd.read_sql_query("SELECT COUNT(*) FROM submissions WHERE ai_confidence > 0", conn).iloc[0,0] or 0
+                stats_data["Metric"].append("AI-Graded Submissions")
+                stats_data["Value"].append(ai_graded)
+            except:
+                stats_data["Metric"].append("AI-Graded Submissions")
+                stats_data["Value"].append(0)
+                
+            try:
+                # Check if deletion_requests table exists
+                c = conn.cursor()
+                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='deletion_requests'")
+                if c.fetchone():
+                    pending_deletions = pd.read_sql_query("SELECT COUNT(*) FROM deletion_requests WHERE status='Pending'", conn).iloc[0,0] or 0
+                else:
+                    pending_deletions = 0
+                stats_data["Metric"].append("Pending Deletion Requests")
+                stats_data["Value"].append(pending_deletions)
+            except:
+                stats_data["Metric"].append("Pending Deletion Requests")
+                stats_data["Value"].append(0)
+                
+            conn.close()
+            
+            # Create DataFrame only if we have data
+            if stats_data["Metric"]:
+                # Ensure all lists are the same length (they will be because we added them together)
+                stats_df = pd.DataFrame(stats_data)
+                st.dataframe(stats_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No statistics available.")
+                
+            st.info("📌 Data is automatically cleaned - only last 6 months of submissions and activities are kept.")
+        with tab2:
+            st.subheader("System Settings")
+            st.success("✅ Auto-grading with AI is enabled")
+            st.success("✅ Duplicate submission prevention is enabled")
+            st.write("**Current Points System:**")
+            st.write("- Daily Homework: 5 points (AI-adjusted)")
+            st.write("- Seminar: 10 points (AI-adjusted)")
+            st.write("- Project: 15 points (AI-adjusted)")
+            st.write("- Extra Activity: 25 points (AI-adjusted)")
+            st.write("- Weekly Assignment: 15 points (AI-adjusted)")
+            st.write("- Monthly Assignment: 30 points (AI-adjusted)")
+            st.write("- Research Paper: 25 points (AI-adjusted)")
+            st.write("- Lab Report: 8 points (AI-adjusted)")
+
 # ========== FOOTER WITH FOUR TABS ==========
 st.markdown("---")
 
+# Footer tabs
 footer_col1, footer_col2, footer_col3, footer_col4 = st.columns(4)
 
 with footer_col1:
     if st.button("🔒 Privacy Policy", use_container_width=True):
         st.session_state.show_privacy = not st.session_state.get('show_privacy', False)
+        # Close other tabs
         st.session_state.show_terms = False
         st.session_state.show_contact = False
         st.session_state.show_deletion = False
@@ -1532,6 +3005,7 @@ with footer_col1:
 with footer_col2:
     if st.button("📜 Terms & Disclaimer", use_container_width=True):
         st.session_state.show_terms = not st.session_state.get('show_terms', False)
+        # Close other tabs
         st.session_state.show_privacy = False
         st.session_state.show_contact = False
         st.session_state.show_deletion = False
@@ -1539,6 +3013,7 @@ with footer_col2:
 with footer_col3:
     if st.button("📩 Contact / About", use_container_width=True):
         st.session_state.show_contact = not st.session_state.get('show_contact', False)
+        # Close other tabs
         st.session_state.show_privacy = False
         st.session_state.show_terms = False
         st.session_state.show_deletion = False
@@ -1546,6 +3021,7 @@ with footer_col3:
 with footer_col4:
     if st.button("🗑️ Data Deletion", use_container_width=True):
         st.session_state.show_deletion = not st.session_state.get('show_deletion', False)
+        # Close other tabs
         st.session_state.show_privacy = False
         st.session_state.show_terms = False
         st.session_state.show_contact = False
@@ -1555,31 +3031,281 @@ st.markdown("<br>", unsafe_allow_html=True)
 # Privacy Policy Tab
 if st.session_state.get('show_privacy', False):
     with st.container():
-        st.markdown("<h3 style='color: #1f77b4;'>🔒 Privacy Policy</h3>", unsafe_allow_html=True)
-        st.info("📄 Privacy policy will be available soon.")
+        st.markdown("""
+        <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+            <h3 style='color: #1f77b4;'>🔒 Privacy Policy</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        try:
+            with open('privacy_policy.md', 'r') as f:
+                privacy_text = f.read()
+            st.markdown(privacy_text)
+        except FileNotFoundError:
+            st.info("📄 Privacy policy document will be available soon. Please check back later.")
+            with st.expander("View Sample Privacy Policy"):
+                st.markdown("""
+                # Privacy Policy for Student Evaluation System
+                
+                **Last Updated: February 2026**
+                
+                ## 1. Introduction
+                Welcome to the Student Evaluation System. This Privacy Policy explains how we collect, use, and protect your information.
+                
+                ## 2. Information We Collect
+                - Name and registration number
+                - Email address and phone number
+                - Academic class and subject information
+                - Assignment submissions and grades
+                
+                ## 3. How We Use Your Information
+                - To provide educational services
+                - To grade assignments and track progress
+                - To generate leaderboards and reward points
+                
+                ## 4. Data Storage
+                - All data is stored securely
+                - Passwords are hashed and encrypted
+                - Data retention: 6 months for submissions
+                
+                ## 5. Contact Us
+                Email: sajjanvsl@gmail.com
+                Phone: 9008802403
+                """)
 
 # Terms & Disclaimer Tab
 if st.session_state.get('show_terms', False):
     with st.container():
-        st.markdown("<h3 style='color: #ff6b4a;'>📜 Terms & Disclaimer</h3>", unsafe_allow_html=True)
-        st.info("📄 Terms and disclaimer will be available soon.")
+        st.markdown("""
+        <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+            <h3 style='color: #ff6b4a;'>📜 Terms & Disclaimer</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""
+        ### Terms of Use
+        
+        By using this Student Evaluation System, you agree to the following terms:
+        
+        1. **Acceptance of Terms**
+           - By accessing or using this system, you agree to be bound by these terms.
+           - If you do not agree, please do not use the system.
+        
+        2. **User Accounts**
+           - You are responsible for maintaining the confidentiality of your account.
+           - You are responsible for all activities under your account.
+           - Notify us immediately of any unauthorized use.
+        
+        3. **Acceptable Use**
+           - You agree to use the system only for lawful purposes.
+           - You will not submit false or misleading information.
+           - You will not attempt to bypass security measures.
+           - You will not submit plagiarized content.
+        
+        4. **Academic Integrity**
+           - All submissions must be your own original work.
+           - The system uses AI to detect potential plagiarism.
+           - Repeated violations may result in account suspension.
+        
+        5. **Intellectual Property**
+           - The system and its content are protected by copyright.
+           - You retain ownership of your submitted content.
+           - You grant us license to use submissions for educational purposes.
+        
+        ### Disclaimer
+        
+        **Limitation of Liability**
+        
+        The Student Evaluation System is provided "as is" without warranties of any kind. We do not guarantee that:
+        
+        - The system will be error-free or uninterrupted
+        - Results from AI grading will be perfect
+        - Data loss will not occur
+        
+        We are not liable for any damages arising from:
+        - Use or inability to use the system
+        - Loss of data or profits
+        - Academic decisions based on system output
+        
+        **Educational Use Only**
+        
+        This system is designed as an educational tool to assist in the evaluation process. Final academic decisions should be made by qualified educators considering multiple factors.
+        
+        **Changes to Terms**
+        
+        We reserve the right to modify these terms at any time. Continued use of the system constitutes acceptance of updated terms.
+        
+        *Last updated: February 2026*
+        """)
 
 # Contact / About Tab
 if st.session_state.get('show_contact', False):
     with st.container():
-        st.markdown("<h3 style='color: #2ecc71;'>📩 Contact & About Developer</h3>", unsafe_allow_html=True)
-        st.info("📄 Contact information will be available soon.")
+        st.markdown("""
+        <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+            <h3 style='color: #2ecc71;'>📩 Contact & About Developer</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            ### 👨‍🏫 About the Developer
+            
+            **S P Sajjan**
+            *Assistant Professor*
+            *GFGCW, Jamkhandi*
+            
+            ### 🎓 Qualifications
+            - M.Sc., M.Phil., (Ph.D.)
+            - 15+ years of teaching experience
+            - Specialization in Computer Science
+            
+            ### 🏆 Achievements
+            - Developed innovative educational tools
+            - Published research in AI in Education
+            - Recognized for contribution to digital learning
+            
+            ### 💼 Professional Memberships
+            - Indian Society for Technical Education (ISTE)
+            - Computer Society of India (CSI)
+            - International Association of Engineers (IAENG)
+            """)
+        
+        with col2:
+            st.markdown("""
+            ### 📞 Contact Information
+            
+            **Email:** sajjanvsl@gmail.com  
+            **Phone:** +91 9008802403  
+            **WhatsApp:** +91 9008802403  
+            
+            **Office Address:**  
+            Department of Computer Science  
+            GFGCW, Jamkhandi  
+            Karnataka, India - 587301
+            
+            ### 🌐 Online Presence
+            - [LinkedIn](https://linkedin.com/in/spsajjan)
+            - [ResearchGate](https://researchgate.net/profile/S-P-Sajjan)
+            - [Google Scholar](https://scholar.google.com)
+            
+            ### 🤝 Support
+            For technical support, bug reports, or feature requests:
+            - Email: support@edueval.com
+            - Response time: Within 24 hours
+            - Available: Monday to Friday, 9 AM - 5 PM IST
+            """)
+        
+        st.markdown("---")
+        st.markdown("""
+        ### 💡 About This Project
+        
+        **Continuous Student Evaluation & Monitoring System v4.1**
+        
+        This system is designed to modernize student evaluation through:
+        
+        - 🤖 AI-Powered Validation of assignments
+        - 📊 Real-time progress tracking
+        - 🎯 Gamification through reward points
+        - 📚 Dynamic subject management
+        - 🔒 Secure authentication and data protection
+        
+        **Technology Stack:**
+        - Frontend: Streamlit
+        - Backend: Python, SQLite
+        - AI: scikit-learn, TF-IDF, Cosine Similarity
+        - Deployment: Streamlit Cloud
+        
+        **Version History:**
+        - v4.1 (Current): Added privacy tabs, duplicate prevention, simplified UI
+        - v4.0: AI validation, faculty edit features
+        - v3.2: File upload, forgot password
+        - v3.0: Subject-wise registration
+        """)
 
 # Data Deletion Tab
 if st.session_state.get('show_deletion', False):
     with st.container():
-        st.markdown("<h3 style='color: #e74c3c;'>🗑️ Data Deletion Request</h3>", unsafe_allow_html=True)
-        st.info("📄 Data deletion request feature will be available soon.")
+        st.markdown("""
+        <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+            <h3 style='color: #e74c3c;'>🗑️ Data Deletion Request</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.warning("⚠️ This action is irreversible. All your data will be permanently deleted.")
+        
+        if st.session_state.user_role:
+            # Logged in user can request deletion
+            user_email = ""
+            user_type = st.session_state.user_role
+            
+            if user_type == "student":
+                student = st.session_state.current_student
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("PRAGMA table_info(students)")
+                columns = [col[1] for col in c.fetchall()]
+                conn.close()
+                student_dict = dict(zip(columns, student))
+                user_email = student_dict.get('email', '')
+            else:
+                teacher = st.session_state.current_teacher
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("PRAGMA table_info(teachers)")
+                columns = [col[1] for col in c.fetchall()]
+                conn.close()
+                teacher_dict = dict(zip(columns, teacher))
+                user_email = teacher_dict.get('email', '')
+            
+            st.info(f"**Your email:** {user_email}")
+            
+            with st.form("deletion_request_form"):
+                st.markdown("### Please confirm data deletion")
+                
+                reason = st.text_area("Reason for deletion (optional)", 
+                                      placeholder="Help us improve by sharing your reason...")
+                
+                confirm_text = st.text_input("Type 'DELETE' to confirm", type="password")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.form_submit_button("✅ Request Deletion"):
+                        if confirm_text == "DELETE":
+                            if request_data_deletion(user_email, user_type, reason):
+                                st.success("✅ Your deletion request has been submitted. An administrator will process it within 7 days.")
+                                st.info("📧 You will receive a confirmation email once your data is deleted.")
+                        else:
+                            st.error("Please type 'DELETE' to confirm")
+                with col2:
+                    if st.form_submit_button("↩️ Cancel"):
+                        st.session_state.show_deletion = False
+                        st.rerun()
+        else:
+            # Not logged in - provide email form
+            st.info("Please provide your email address to request data deletion.")
+            
+            with st.form("deletion_request_public_form"):
+                email = st.text_input("Email address*")
+                user_type = st.selectbox("I am a*", ["Student", "Teacher"])
+                reason = st.text_area("Reason for deletion (optional)")
+                
+                confirm_text = st.text_input("Type 'DELETE' to confirm*", type="password")
+                
+                if st.form_submit_button("Submit Deletion Request"):
+                    if email and confirm_text == "DELETE":
+                        if request_data_deletion(email.strip().lower(), user_type.lower(), reason):
+                            st.success("✅ Your deletion request has been submitted. An administrator will process it within 7 days.")
+                            st.info("📧 You will receive a confirmation email once your data is deleted.")
+                    else:
+                        st.error("Please provide email and type 'DELETE' to confirm")
 
-# Main footer
+# Main footer with credits
 st.markdown("""
 <div style='text-align: center; padding: 15px 0; margin-top: 20px; border-top: 1px solid #ddd;'>
-    <p style='margin: 5px 0; font-weight: bold;'>Continuous Student Evaluation & Monitoring System</p>
+    <p style='margin: 5px 0; font-weight: bold;'>Continuous Student Evaluation & Monitoring System v4.1</p>
     <p style='margin: 3px 0;'>Design and Maintained by: S P Sajjan, Assistant Professor, GFGCW, Jamkhandi</p>
     <p style='margin: 3px 0;'>📧 Contact: sajjanvsl@gmail.com | 📞 Help Desk: 9008802403</p>
     <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention</p>
