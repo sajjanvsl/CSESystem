@@ -1943,19 +1943,5 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
---
-       
 
-   
-
-
-Regards
-
-Mr. S P Sajjan
-Assistant Professor
-Dept. of  Computer Science
-Govt. First Grade College for women, Jamkhandi.
-Bagalkot, Karnataka.
-Visit: http://www.sajjanvsl.blogspot.in
-ORCID No: 0000-0001-7891-2446
 
