@@ -33,8 +33,8 @@ except ImportError:
 st.set_page_config(page_title="Student Evaluation System", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # ---------- Supabase configuration ----------
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")   # Use the publishable key here
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://qjlypajeavbmsobhogfd.supabase.co")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_publishable_yfvTRBgiBGYHWgrX2ZbzVw_KLTk0ddh")   # Use the publishable key here
 USE_SUPABASE = SUPABASE_AVAILABLE and SUPABASE_URL and SUPABASE_KEY
 
 if USE_SUPABASE:
@@ -1280,10 +1280,6 @@ elif st.session_state.user_role == "student":
                     if title and description:
                         file_path = file_name = file_type = file_size = None
                         if uploaded_file:
-                            # File size limit: 500 KB
-                            if uploaded_file.size > 512000:
-                                st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
-                                st.stop()
                             upload_dir = Path("uploads") / student_reg / "submissions"
                             upload_dir.mkdir(parents=True, exist_ok=True)
                             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1321,10 +1317,6 @@ elif st.session_state.user_role == "student":
                 if topic:
                     file_path = file_name = None
                     if uploaded_file:
-                        # File size limit: 500 KB
-                        if uploaded_file.size > 512000:
-                            st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
-                            st.stop()
                         upload_dir = Path("uploads") / student_reg / "activities"
                         upload_dir.mkdir(parents=True, exist_ok=True)
                         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1446,7 +1438,10 @@ elif st.session_state.user_role == "student":
         col1, col2 = st.columns(2)
         start = st.date_input("Start Date", datetime.now().date() - timedelta(days=30))
         end = st.date_input("End Date", datetime.now().date())
-        daily_all = get_daily_activity(student_id, 365)
+        # Use the Supabase get_daily_activity function but with date range
+        # We'll just use get_daily_activity and filter (or implement custom)
+        # Simplified: get all daily activity and filter
+        daily_all = get_daily_activity(student_id, 365)  # get all
         if not daily_all.empty:
             daily_all['activity_date'] = pd.to_datetime(daily_all['activity_date'])
             mask = (daily_all['activity_date'] >= pd.to_datetime(start)) & (daily_all['activity_date'] <= pd.to_datetime(end))
@@ -1947,3 +1942,20 @@ st.markdown("""
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
+
+--
+       
+
+   
+
+
+Regards
+
+Mr. S P Sajjan
+Assistant Professor
+Dept. of  Computer Science
+Govt. First Grade College for women, Jamkhandi.
+Bagalkot, Karnataka.
+Visit: http://www.sajjanvsl.blogspot.in
+ORCID No: 0000-0001-7891-2446
+
