@@ -34,7 +34,7 @@ st.set_page_config(page_title="Student Evaluation System", page_icon="📚", lay
 
 # ---------- Supabase configuration ----------
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")   # Use the publishable key here
 USE_SUPABASE = SUPABASE_AVAILABLE and SUPABASE_URL and SUPABASE_KEY
 
 if USE_SUPABASE:
@@ -84,7 +84,6 @@ def generate_temp_password(length=8):
     return ''.join(random.choice(chars) for _ in range(length))
 
 def validate_class_name(class_name):
-    """Validate and normalize class name."""
     if not class_name or len(class_name.strip()) < 2:
         return False, "Class name is too short. Use e.g., BCA VI"
     class_upper = class_name.upper()
@@ -120,7 +119,6 @@ def validate_class_name(class_name):
 
 # ---------- Supabase CRUD functions ----------
 def get_student_by_email_or_regno(identifier, use_regno=False):
-    """Return student dict or None."""
     try:
         if use_regno:
             result = supabase.table('students').select('*').eq('reg_no', identifier.strip()).execute()
@@ -230,7 +228,6 @@ def faculty_edit_student(student_id, reg_no, name, class_name, email, phone, pas
 
 def delete_student(student_id):
     try:
-        # Delete related records first
         supabase.table('submissions').delete().eq('student_id', student_id).execute()
         supabase.table('activities').delete().eq('student_id', student_id).execute()
         supabase.table('daily_activity').delete().eq('student_id', student_id).execute()
@@ -304,7 +301,6 @@ def remove_student_subject(student_id, subject_id):
 
 def add_teacher(teacher_code, name, email, password, department):
     try:
-        # Check duplicates
         existing = supabase.table('teachers').select('teacher_id').eq('teacher_code', teacher_code).execute()
         if existing.data:
             st.error("Teacher code already exists!")
@@ -426,7 +422,6 @@ def assign_subject_to_teacher(subject_id, teacher_id):
         return False
 
 def add_submission(submission_data):
-    """Insert a submission record."""
     try:
         result = supabase.table('submissions').insert(submission_data).execute()
         return result.data[0]['submission_id'] if result.data else None
@@ -530,7 +525,6 @@ def get_daily_activity(student_id, days=7):
 
 def update_daily_activity(student_id, date, points, activity_type='submission'):
     try:
-        # Check if row exists
         existing = supabase.table('daily_activity').select('*').eq('student_id', student_id).eq('activity_date', date).execute()
         if existing.data:
             row = existing.data[0]
@@ -565,7 +559,6 @@ def get_leaderboard(limit=20, class_filter=None):
         if not result.data:
             return pd.DataFrame()
         df = pd.DataFrame(result.data)
-        # Add submissions and activities counts (separate queries)
         for idx, row in df.iterrows():
             subs = supabase.table('submissions').select('submission_id').eq('student_id', row['student_id']).execute()
             acts = supabase.table('activities').select('activity_id').eq('student_id', row['student_id']).execute()
@@ -595,7 +588,6 @@ def get_student_progress(student_id):
 
 def update_student_streak(student_id, submission_date):
     try:
-        # Get last_active
         student = supabase.table('students').select('last_active, current_streak, best_streak').eq('student_id', student_id).execute()
         if not student.data:
             return
@@ -618,18 +610,145 @@ def update_student_streak(student_id, submission_date):
     except Exception as e:
         pass
 
-# ---------- AI & file functions (unchanged) ----------
+# ---------- AI & file functions ----------
 def validate_submission_with_ai(submission_text, subject, topic=None):
-    # (same as original, using SKLEARN_AVAILABLE flag)
-    # For brevity, I'll keep the original logic but ensure it returns the same dict.
-    # We'll assume the function exists.
-    pass  # Placeholder – actual implementation is long, but you can copy from your previous code.
+    if not submission_text or len(submission_text.strip()) < 10:
+        return {
+            'confidence': 0.3,
+            'feedback': "Submission is too short. Please provide more detailed content.",
+            'plagiarism_score': 0.0,
+            'quality_score': 0.3,
+            'word_count': len(submission_text.split()),
+            'keyword_score': 0.0
+        }
+    word_count = len(submission_text.split())
+    sentence_count = len(re.findall(r'[.!?]+', submission_text))
+    # Get reference answers
+    try:
+        if topic:
+            refs = supabase.table('reference_answers').select('answer_text').eq('subject', subject).eq('topic', topic).execute()
+        else:
+            refs = supabase.table('reference_answers').select('answer_text').eq('subject', subject).execute()
+        references = [r['answer_text'] for r in refs.data] if refs.data else []
+    except Exception:
+        references = []
+    similarity_scores = []
+    if references and SKLEARN_AVAILABLE:
+        try:
+            vectorizer = TfidfVectorizer(stop_words='english')
+            all_texts = [submission_text] + references
+            tfidf_matrix = vectorizer.fit_transform(all_texts)
+            similarity_matrix = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])
+            similarity_scores = similarity_matrix.flatten().tolist()
+        except:
+            similarity_scores = []
+    elif references and not SKLEARN_AVAILABLE:
+        submission_words = set(submission_text.lower().split())
+        for ref in references:
+            ref_words = set(ref.lower().split())
+            if len(submission_words) > 0 and len(ref_words) > 0:
+                overlap = len(submission_words.intersection(ref_words))
+                total = len(submission_words.union(ref_words))
+                similarity_scores.append(overlap / total if total > 0 else 0)
+            else:
+                similarity_scores.append(0)
+    plagiarism_score = max(similarity_scores) if similarity_scores else 0.0
+    common_keywords = {
+        'Database Management': ['sql','query','table','database','normalization','index','data','server'],
+        'Web Technologies': ['html','css','javascript','web','browser','server','client','http'],
+        'Python Programming': ['python','variable','function','class','loop','list','dict','import'],
+        'General': ['example','explain','define','describe','compare','analyze','discuss']
+    }
+    keywords = common_keywords.get(subject, common_keywords['General'])
+    submission_lower = submission_text.lower()
+    keyword_matches = sum(1 for keyword in keywords if keyword in submission_lower)
+    keyword_score = keyword_matches / len(keywords) if keywords else 0.5
+    length_score = min(word_count / 100, 1.0)
+    structure_score = min(sentence_count / 5, 1.0)
+    quality_score = (length_score * 0.3 + structure_score * 0.2 + keyword_score * 0.5)
+    confidence = quality_score * 0.7 + (1 - plagiarism_score) * 0.3
+    feedback_parts = []
+    if word_count < 50:
+        feedback_parts.append("• Your submission could be more detailed. Aim for at least 50-100 words.")
+    elif word_count > 200:
+        feedback_parts.append("• Good length! Your submission is comprehensive.")
+    if plagiarism_score > 0.7:
+        feedback_parts.append("⚠️ High similarity with reference materials detected. Please use your own words.")
+    elif plagiarism_score > 0.4:
+        feedback_parts.append("• Moderate similarity with reference materials. Try to paraphrase more.")
+    else:
+        feedback_parts.append("✓ Good originality in your response.")
+    if keyword_score < 0.3:
+        feedback_parts.append("• Missing key terminology. Try to include more subject-specific terms.")
+    elif keyword_score > 0.7:
+        feedback_parts.append("✓ Excellent use of subject terminology!")
+    if structure_score < 0.5:
+        feedback_parts.append("• Consider organizing your response into clearer sentences/paragraphs.")
+    if not SKLEARN_AVAILABLE:
+        feedback_parts.append("• Note: Advanced AI features limited (scikit-learn not installed).")
+    feedback = "\n".join(feedback_parts)
+    return {
+        'confidence': round(confidence, 2),
+        'feedback': feedback,
+        'plagiarism_score': round(plagiarism_score, 2),
+        'quality_score': round(quality_score, 2),
+        'word_count': word_count,
+        'keyword_score': round(keyword_score, 2)
+    }
+
+def add_reference_answer(subject, topic, answer_text, teacher_id):
+    try:
+        supabase.table('reference_answers').insert({
+            'subject': subject,
+            'topic': topic,
+            'answer_text': answer_text,
+            'created_by': teacher_id
+        }).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error adding reference answer: {e}")
+        return False
+
+def check_duplicate_submission(student_id, subject, title, description, submission_type):
+    try:
+        thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        res = supabase.table('submissions').select('submission_id, date, title').eq('student_id', student_id).eq('subject', subject).eq('title', title).gte('date', thirty_days_ago).execute()
+        if res.data:
+            return True, f"You have already submitted an assignment with the same title on {res.data[0]['date']}"
+        return False, ""
+    except Exception as e:
+        return False, ""
+
+def get_auto_grade_points(submission_type):
+    mapping = {
+        'Daily Homework': 5,
+        'Weekly Assignment': 15,
+        'Monthly Assignment': 30,
+        'Seminar': 10,
+        'Project': 15,
+        'Research Paper': 25,
+        'Lab Report': 8,
+        'Extra Activity': 25
+    }
+    return mapping.get(submission_type, 5)
+
+def get_auto_grade_letter(submission_type):
+    mapping = {
+        'Daily Homework': 'A',
+        'Weekly Assignment': 'A',
+        'Monthly Assignment': 'A+',
+        'Seminar': 'A',
+        'Project': 'A+',
+        'Research Paper': 'A+',
+        'Lab Report': 'A',
+        'Extra Activity': 'A+'
+    }
+    return mapping.get(submission_type, 'A')
 
 def add_submission_with_ai(student_id, submission_type, subject, title, description, date,
                            file_path=None, file_name=None, file_type=None, file_size=None):
     points = get_auto_grade_points(submission_type)
     grade = get_auto_grade_letter(submission_type)
-    # duplicate check
     is_duplicate, dup_msg = check_duplicate_submission(student_id, subject, title, description, submission_type)
     if is_duplicate:
         st.error(dup_msg)
@@ -665,7 +784,6 @@ def add_submission_with_ai(student_id, submission_type, subject, title, descript
             new_total = student.data[0]['total_points'] + adjusted_points
             supabase.table('students').update({'total_points': new_total}).eq('student_id', student_id).execute()
         update_student_streak(student_id, date)
-        # Point transaction
         supabase.table('point_transactions').insert({
             'student_id': student_id,
             'transaction_type': 'Auto Graded',
@@ -693,7 +811,6 @@ def add_extra_activity(student_id, activity_type, topic, date, duration, remarks
         'file_name': file_name
     }
     if add_activity(data):
-        # Update student total_points
         student = supabase.table('students').select('total_points').eq('student_id', student_id).execute()
         if student.data:
             new_total = student.data[0]['total_points'] + points
@@ -759,44 +876,6 @@ def request_data_deletion(email, user_type, reason):
         return True
     except Exception as e:
         return False
-
-def get_auto_grade_points(submission_type):
-    mapping = {
-        'Daily Homework': 5,
-        'Weekly Assignment': 15,
-        'Monthly Assignment': 30,
-        'Seminar': 10,
-        'Project': 15,
-        'Research Paper': 25,
-        'Lab Report': 8,
-        'Extra Activity': 25
-    }
-    return mapping.get(submission_type, 5)
-
-def get_auto_grade_letter(submission_type):
-    mapping = {
-        'Daily Homework': 'A',
-        'Weekly Assignment': 'A',
-        'Monthly Assignment': 'A+',
-        'Seminar': 'A',
-        'Project': 'A+',
-        'Research Paper': 'A+',
-        'Lab Report': 'A',
-        'Extra Activity': 'A+'
-    }
-    return mapping.get(submission_type, 'A')
-
-def check_duplicate_submission(student_id, subject, title, description, submission_type):
-    # For simplicity, we can implement a simple check by title in the last 30 days.
-    try:
-        thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        res = supabase.table('submissions').select('submission_id, date, title').eq('student_id', student_id).eq('subject', subject).eq('title', title).gte('date', thirty_days_ago).execute()
-        if res.data:
-            return True, f"You have already submitted an assignment with the same title on {res.data[0]['date']}"
-        # More advanced similarity check could be added
-        return False, ""
-    except Exception as e:
-        return False, ""
 
 def get_file_download_link(file_path, file_name):
     if os.path.exists(file_path):
@@ -953,9 +1032,6 @@ with st.sidebar:
                     st.rerun()
                 else:
                     st.error("Test student not found.")
-            if st.button("🔑 Show Stored Hashes"):
-                # Not needed for Supabase
-                pass
 
     st.markdown("---")
     if st.session_state.user_role:
@@ -1111,7 +1187,7 @@ elif st.session_state.user_role == "student":
         st.subheader("📚 Your Registered Subjects")
         subjects_df = get_student_subjects(student_id)
         if not subjects_df.empty:
-            st.dataframe(subjects_df[['subject_code', 'subject_name', 'teacher_name']], use_container_width=True)
+            st.dataframe(subjects_df[['subject_code','subject_name','teacher_name']], use_container_width=True)
         else:
             st.info("No subjects registered yet. Go to 'My Subjects' to register.")
         progress = get_student_progress(student_id)
@@ -1161,7 +1237,7 @@ elif st.session_state.user_role == "student":
             st.subheader("Your Registered Subjects")
             subjects_df = get_student_subjects(student_id)
             if not subjects_df.empty:
-                st.dataframe(subjects_df[['subject_code', 'subject_name', 'teacher_name', 'registration_date']], use_container_width=True)
+                st.dataframe(subjects_df[['subject_code','subject_name','teacher_name','registration_date']], use_container_width=True)
                 st.markdown("---")
                 st.subheader("Remove Subjects")
                 subject_options = {f"{row['subject_code']} - {row['subject_name']}": row['subject_id'] for _, row in subjects_df.iterrows()}
@@ -1362,22 +1438,25 @@ elif st.session_state.user_role == "student":
         col1, col2 = st.columns(2)
         start = st.date_input("Start Date", datetime.now().date() - timedelta(days=30))
         end = st.date_input("End Date", datetime.now().date())
-        try:
-            df = pd.read_sql_query(
-                "SELECT activity_date, submission_count, activity_count, total_points_earned FROM daily_activity WHERE student_id = ? AND activity_date BETWEEN ? AND ? ORDER BY activity_date DESC",
-                conn, params=(student_id, start, end)
-            )
-        except:
-            df = pd.DataFrame()
-        if not df.empty:
-            total_days = len(df)
-            active_days = len(df[df['total_points_earned']>0])
-            total_pts = df['total_points_earned'].sum()
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Days", total_days)
-            col2.metric("Active Days", active_days)
-            col3.metric("Total Points", total_pts)
-            st.dataframe(df, use_container_width=True)
+        # Use the Supabase get_daily_activity function but with date range
+        # We'll just use get_daily_activity and filter (or implement custom)
+        # Simplified: get all daily activity and filter
+        daily_all = get_daily_activity(student_id, 365)  # get all
+        if not daily_all.empty:
+            daily_all['activity_date'] = pd.to_datetime(daily_all['activity_date'])
+            mask = (daily_all['activity_date'] >= pd.to_datetime(start)) & (daily_all['activity_date'] <= pd.to_datetime(end))
+            df = daily_all[mask].sort_values('activity_date', ascending=False)
+            if not df.empty:
+                total_days = len(df)
+                active_days = len(df[df['total_points_earned']>0])
+                total_pts = df['total_points_earned'].sum()
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Total Days", total_days)
+                col2.metric("Active Days", active_days)
+                col3.metric("Total Points", total_pts)
+                st.dataframe(df[['activity_date','submission_count','activity_count','total_points_earned']], use_container_width=True)
+            else:
+                st.info("No activity recorded.")
         else:
             st.info("No activity recorded.")
 
@@ -1438,15 +1517,12 @@ elif st.session_state.user_role == "student":
             if st.form_submit_button("Update Profile"):
                 if new_pass:
                     if new_pass == confirm:
-                        # Update password
                         supabase.table('students').update({'password': hash_password(new_pass)}).eq('student_id', student_id).execute()
                         st.success("Password updated.")
                     else:
                         st.error("Passwords do not match!")
-                # Update profile
                 supabase.table('students').update({'name': name, 'email': email, 'phone': phone}).eq('student_id', student_id).execute()
                 st.success("Profile updated successfully!")
-                # Refresh session
                 student = supabase.table('students').select('*').eq('student_id', student_id).execute().data[0]
                 st.session_state.current_student = student
                 st.rerun()
@@ -1523,7 +1599,6 @@ elif st.session_state.user_role == "teacher":
                 selected = st.selectbox("Select subject to delete:", list(subject_options.keys()))
                 if selected:
                     subj_id = subject_options[selected]
-                    # Check student count
                     regs = supabase.table('student_subjects').select('id').eq('subject_id', subj_id).execute()
                     if regs.data:
                         st.warning(f"⚠️ This subject has {len(regs.data)} student registrations.")
@@ -1675,7 +1750,7 @@ elif st.session_state.user_role == "teacher":
                         st.error("Please fill all fields.")
         with tab2:
             try:
-                result = supabase.table('reference_answers').select('*').order('subject', 'topic').execute()
+                result = supabase.table('reference_answers').select('*').order('subject').order('topic').execute()
                 if result.data:
                     for row in result.data:
                         with st.expander(f"📚 {row['subject']} - {row['topic']}"):
@@ -1715,7 +1790,6 @@ elif st.session_state.user_role == "teacher":
         if subj_dist.data:
             subj_ids = [s['subject_id'] for s in subj_dist.data]
             if subj_ids:
-                # Get subject details
                 subjects = supabase.table('subjects').select('subject_code, subject_name, class, teachers(name)').in_('subject_id', subj_ids).execute()
                 if subjects.data:
                     df_subj = pd.DataFrame(subjects.data)
@@ -1740,21 +1814,26 @@ elif st.session_state.user_role == "teacher":
             department = st.text_input("Department", value=teacher_dept)
             new_pass = st.text_input("New Password (optional)", type="password")
             confirm = st.text_input("Confirm New Password", type="password")
-            if st.form_submit_button("Update Profile"):
+            submitted = st.form_submit_button("Update Profile")
+            if submitted:
                 if new_pass:
                     if new_pass != confirm:
                         st.error("Passwords do not match!")
-                        return
-                updates = {'name': name, 'email': email, 'department': department}
-                if new_pass:
-                    updates['password'] = hash_password(new_pass)
-                supabase.table('teachers').update(updates).eq('teacher_id', teacher_id).execute()
-                st.success("Profile updated! Please login again.")
-                st.session_state.current_teacher = None
-                st.session_state.user_role = None
-                st.session_state.logged_in = False
-                st.session_state.page = "Welcome"
-                st.rerun()
+                    else:
+                        updates = {'name': name, 'email': email, 'department': department, 'password': hash_password(new_pass)}
+                        supabase.table('teachers').update(updates).eq('teacher_id', teacher_id).execute()
+                        st.success("Profile updated! Please login again.")
+                        st.session_state.current_teacher = None
+                        st.session_state.user_role = None
+                        st.session_state.logged_in = False
+                        st.session_state.page = "Welcome"
+                        st.rerun()
+                else:
+                    updates = {'name': name, 'email': email, 'department': department}
+                    supabase.table('teachers').update(updates).eq('teacher_id', teacher_id).execute()
+                    st.success("Profile updated successfully!")
+                    st.session_state.current_teacher = supabase.table('teachers').select('*').eq('teacher_id', teacher_id).execute().data[0]
+                    st.rerun()
 
     elif st.session_state.page == "⚙️ Manage System":
         st.header("System Management")
@@ -1767,7 +1846,8 @@ elif st.session_state.user_role == "teacher":
             stats["Total Subjects"] = supabase.table('subjects').select('subject_id').execute().data.__len__()
             stats["Total Submissions"] = supabase.table('submissions').select('submission_id').execute().data.__len__()
             stats["Total Activities"] = supabase.table('activities').select('activity_id').execute().data.__len__()
-            stats["Total Points Awarded"] = sum(s['total_points'] for s in supabase.table('students').select('total_points').execute().data) if supabase.table('students').select('total_points').execute().data else 0
+            total_points = supabase.table('students').select('total_points').execute().data
+            stats["Total Points Awarded"] = sum(p['total_points'] for p in total_points) if total_points else 0
             stats["AI-Graded Submissions"] = supabase.table('submissions').select('submission_id').gt('ai_confidence', 0).execute().data.__len__()
             stats["Pending Deletion Requests"] = supabase.table('deletion_requests').select('request_id').eq('status', 'Pending').execute().data.__len__()
             df_stats = pd.DataFrame(list(stats.items()), columns=["Metric", "Value"])
