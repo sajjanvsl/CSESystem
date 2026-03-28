@@ -33,8 +33,8 @@ except ImportError:
 st.set_page_config(page_title="Student Evaluation System", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
 # ---------- Supabase configuration ----------
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://qjlypajeavbmsobhogfd.supabase.co")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_publishable_yfvTRBgiBGYHWgrX2ZbzVw_KLTk0ddh")   # Use the publishable key here
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
 USE_SUPABASE = SUPABASE_AVAILABLE and SUPABASE_URL and SUPABASE_KEY
 
 if USE_SUPABASE:
@@ -137,7 +137,6 @@ def add_student(reg_no, name, class_name, email, password, phone=None):
         st.error(normalized_class)
         return False
     try:
-        # Check duplicates
         existing = supabase.table('students').select('student_id').eq('reg_no', reg_no).execute()
         if existing.data:
             st.error("Registration number already exists!")
@@ -172,7 +171,6 @@ def edit_student_registration(student_id, name, class_name, email, phone):
         st.error(normalized_class)
         return False
     try:
-        # Check email uniqueness
         existing = supabase.table('students').select('student_id').eq('email', email).neq('student_id', student_id).execute()
         if existing.data:
             st.error("Email already exists for another student!")
@@ -185,7 +183,6 @@ def edit_student_registration(student_id, name, class_name, email, phone):
         }).eq('student_id', student_id).execute()
         if result.data:
             st.success(f"Registration updated. Class set to {normalized_class}")
-            # Update session
             st.session_state.current_student = result.data[0]
             return True
         return False
@@ -199,7 +196,6 @@ def faculty_edit_student(student_id, reg_no, name, class_name, email, phone, pas
         st.error(normalized_class)
         return False
     try:
-        # Check reg_no uniqueness
         existing = supabase.table('students').select('student_id').eq('reg_no', reg_no).neq('student_id', student_id).execute()
         if existing.data:
             st.error("Registration number already exists for another student!")
@@ -266,7 +262,6 @@ def get_student_subjects(student_id):
                 'teacher_name': None,
                 'registration_date': item['registration_date']
             })
-        # Add teacher names if needed
         teacher_ids = [row['teacher_id'] for row in rows if row['teacher_id']]
         if teacher_ids:
             teachers = supabase.table('teachers').select('teacher_id, name').in_('teacher_id', teacher_ids).execute()
@@ -373,7 +368,6 @@ def add_subject(subject_code, subject_name, class_name, teacher_id=None):
 
 def delete_subject(subject_id):
     try:
-        # Check if any students registered
         result = supabase.table('student_subjects').select('id').eq('subject_id', subject_id).execute()
         if result.data:
             if not st.session_state.get(f'confirm_delete_{subject_id}', False):
@@ -391,7 +385,6 @@ def delete_subject(subject_id):
 def get_all_subjects(class_name=None):
     try:
         if class_name:
-            # Try exact match, then normalized
             is_valid, norm = validate_class_name(class_name)
             candidates = [class_name, norm] if is_valid else [class_name]
             rows = []
@@ -401,7 +394,6 @@ def get_all_subjects(class_name=None):
                     rows = res.data
                     break
             if not rows:
-                # fallback case‑insensitive
                 res = supabase.table('subjects').select('*, teachers(name)').ilike('class', f'%{class_name}%').execute()
                 rows = res.data
         else:
@@ -493,7 +485,8 @@ def add_reward_claim(student_id, reward_type, points_cost):
             'status': 'Claimed',
             'claimed_at': datetime.now().isoformat()
         }).execute()
-        supabase.table('students').update({'total_points': supabase.table('students').select('total_points').eq('student_id', student_id).execute().data[0]['total_points'] - points_cost}).eq('student_id', student_id).execute()
+        student = supabase.table('students').select('total_points').eq('student_id', student_id).execute().data[0]
+        supabase.table('students').update({'total_points': student['total_points'] - points_cost}).eq('student_id', student_id).execute()
         supabase.table('point_transactions').insert({
             'student_id': student_id,
             'transaction_type': 'Reward Claimed',
@@ -623,7 +616,6 @@ def validate_submission_with_ai(submission_text, subject, topic=None):
         }
     word_count = len(submission_text.split())
     sentence_count = len(re.findall(r'[.!?]+', submission_text))
-    # Get reference answers
     try:
         if topic:
             refs = supabase.table('reference_answers').select('answer_text').eq('subject', subject).eq('topic', topic).execute()
@@ -778,11 +770,8 @@ def add_submission_with_ai(student_id, submission_type, subject, title, descript
     }
     submission_id = add_submission(data)
     if submission_id:
-        # Update student total_points
-        student = supabase.table('students').select('total_points').eq('student_id', student_id).execute()
-        if student.data:
-            new_total = student.data[0]['total_points'] + adjusted_points
-            supabase.table('students').update({'total_points': new_total}).eq('student_id', student_id).execute()
+        student = supabase.table('students').select('total_points').eq('student_id', student_id).execute().data[0]
+        supabase.table('students').update({'total_points': student['total_points'] + adjusted_points}).eq('student_id', student_id).execute()
         update_student_streak(student_id, date)
         supabase.table('point_transactions').insert({
             'student_id': student_id,
@@ -811,10 +800,8 @@ def add_extra_activity(student_id, activity_type, topic, date, duration, remarks
         'file_name': file_name
     }
     if add_activity(data):
-        student = supabase.table('students').select('total_points').eq('student_id', student_id).execute()
-        if student.data:
-            new_total = student.data[0]['total_points'] + points
-            supabase.table('students').update({'total_points': new_total}).eq('student_id', student_id).execute()
+        student = supabase.table('students').select('total_points').eq('student_id', student_id).execute().data[0]
+        supabase.table('students').update({'total_points': student['total_points'] + points}).eq('student_id', student_id).execute()
         supabase.table('point_transactions').insert({
             'student_id': student_id,
             'transaction_type': 'Extra Activity',
@@ -1275,28 +1262,25 @@ elif st.session_state.user_role == "student":
                     st.info("🤖 AI will adjust points")
                     st.info("🔄 Duplicate detection enabled")
                 description = st.text_area("Description*", height=200, placeholder="Write your submission...")
-                uploaded_file = st.file_uploader("Upload File (optional)", type=['pdf','docx','txt','jpg','png','zip','py','java','cpp'])
-
-if st.form_submit_button("Submit", type="primary"):
-    if title and description:
-        file_path = file_name = file_type = file_size = None
-        if uploaded_file:
-            # ---------- FILE SIZE LIMIT ----------
-            if uploaded_file.size > 512000:  # 500 KB
-                st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
-                st.stop()
-            # ------------------------------------
-            upload_dir = Path("uploads") / student_reg / "submissions"
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            file_name = f"{timestamp}_{uploaded_file.name}"
-            file_path = str(upload_dir / file_name)
-            file_type = uploaded_file.type
-            file_size = uploaded_file.size
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-        # ... rest of submission handling
-                submission_id = add_submission_with_ai(
+                st.markdown("**Upload File (optional)** – Max 500 KB")
+                uploaded_file = st.file_uploader("", type=['pdf','docx','txt','jpg','png','zip','py','java','cpp'], label_visibility="collapsed")
+                if st.form_submit_button("Submit", type="primary"):
+                    if title and description:
+                        file_path = file_name = file_type = file_size = None
+                        if uploaded_file:
+                            if uploaded_file.size > 512000:
+                                st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
+                                st.stop()
+                            upload_dir = Path("uploads") / student_reg / "submissions"
+                            upload_dir.mkdir(parents=True, exist_ok=True)
+                            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                            file_name = f"{timestamp}_{uploaded_file.name}"
+                            file_path = str(upload_dir / file_name)
+                            file_type = uploaded_file.type
+                            file_size = uploaded_file.size
+                            with open(file_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+                        submission_id = add_submission_with_ai(
                             student_id, submission_type, selected_subject, title, description,
                             date.strftime('%Y-%m-%d'), file_path, file_name, file_type, file_size
                         )
@@ -1319,12 +1303,12 @@ if st.form_submit_button("Submit", type="primary"):
             with col2:
                 duration = st.number_input("Duration (minutes)", min_value=1, value=60)
                 remarks = st.text_area("Remarks")
-                uploaded_file = st.file_uploader("Upload Supporting Document", type=['pdf','docx','txt','jpg','png','zip'])
+                st.markdown("**Upload Supporting Document** – Max 500 KB")
+                uploaded_file = st.file_uploader("", type=['pdf','docx','txt','jpg','png','zip'], label_visibility="collapsed")
             if st.form_submit_button("Add Activity"):
                 if topic:
                     file_path = file_name = None
                     if uploaded_file:
-                        # File size limit: 500 KB
                         if uploaded_file.size > 512000:
                             st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
                             st.stop()
@@ -1771,7 +1755,6 @@ elif st.session_state.user_role == "teacher":
 
     elif st.session_state.page == "📊 Class Analytics":
         st.header("Class Analytics")
-        # Class performance
         class_perf = supabase.table('students').select('class, total_points').execute()
         if class_perf.data:
             df = pd.DataFrame(class_perf.data)
@@ -1784,7 +1767,6 @@ elif st.session_state.user_role == "teacher":
             ).reset_index().sort_values('avg_points', ascending=False)
             st.subheader("📈 Class Performance")
             st.dataframe(perf, use_container_width=True)
-        # AI metrics
         ai_metrics = supabase.table('submissions').select('ai_confidence, plagiarism_score').gt('ai_confidence', 0).execute()
         if ai_metrics.data:
             df_ai = pd.DataFrame(ai_metrics.data)
@@ -1793,7 +1775,6 @@ elif st.session_state.user_role == "teacher":
             col1.metric("Avg AI Confidence", f"{df_ai['ai_confidence'].mean()*100:.0f}%")
             col2.metric("Avg Originality", f"{(1-df_ai['plagiarism_score'].mean())*100:.0f}%")
             col3.metric("AI-Graded Submissions", len(df_ai))
-        # Subject distribution
         subj_dist = supabase.table('student_subjects').select('subject_id').execute()
         if subj_dist.data:
             subj_ids = [s['subject_id'] for s in subj_dist.data]
