@@ -1276,24 +1276,27 @@ elif st.session_state.user_role == "student":
                     st.info("🔄 Duplicate detection enabled")
                 description = st.text_area("Description*", height=200, placeholder="Write your submission...")
                 uploaded_file = st.file_uploader("Upload File (optional)", type=['pdf','docx','txt','jpg','png','zip','py','java','cpp'])
-                if st.form_submit_button("Submit", type="primary"):
-                    if title and description:
-                        file_path = file_name = file_type = file_size = None
-                        if uploaded_file:
-                            # File size limit: 500 KB
-                            if uploaded_file.size > 512000:
-                                st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
-                                st.stop()
-                            upload_dir = Path("uploads") / student_reg / "submissions"
-                            upload_dir.mkdir(parents=True, exist_ok=True)
-                            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                            file_name = f"{timestamp}_{uploaded_file.name}"
-                            file_path = str(upload_dir / file_name)
-                            file_type = uploaded_file.type
-                            file_size = uploaded_file.size
-                            with open(file_path, "wb") as f:
-                                f.write(uploaded_file.getbuffer())
-                        submission_id = add_submission_with_ai(
+
+if st.form_submit_button("Submit", type="primary"):
+    if title and description:
+        file_path = file_name = file_type = file_size = None
+        if uploaded_file:
+            # ---------- FILE SIZE LIMIT ----------
+            if uploaded_file.size > 512000:  # 500 KB
+                st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
+                st.stop()
+            # ------------------------------------
+            upload_dir = Path("uploads") / student_reg / "submissions"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            file_name = f"{timestamp}_{uploaded_file.name}"
+            file_path = str(upload_dir / file_name)
+            file_type = uploaded_file.type
+            file_size = uploaded_file.size
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+        # ... rest of submission handling
+                submission_id = add_submission_with_ai(
                             student_id, submission_type, selected_subject, title, description,
                             date.strftime('%Y-%m-%d'), file_path, file_name, file_type, file_size
                         )
