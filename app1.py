@@ -754,7 +754,7 @@ def add_submission_with_ai(student_id, submission_type, subject, title, descript
         st.error(dup_msg)
         return None
     ai_result = validate_submission_with_ai(description, subject)
-    adjusted_points = points * ai_result['confidence']
+    adjusted_points = round(points * ai_result['confidence'])
     data = {
         'student_id': student_id,
         'submission_type': submission_type,
