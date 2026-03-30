@@ -34,7 +34,7 @@ st.set_page_config(page_title="Student Evaluation System", page_icon="📚", lay
 
 # ---------- Supabase configuration ----------
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://qjlypajeavbmsobhogfd.supabase.co")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_publishable_yfvTRBgiBGYHWgrX2ZbzVw_KLTk0ddh")   # Use the publishable key here
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_publishable_yfvTRBgiBGYHWgrX2ZbzVw_KLTk0ddh")
 USE_SUPABASE = SUPABASE_AVAILABLE and SUPABASE_URL and SUPABASE_KEY
 
 if USE_SUPABASE:
@@ -421,6 +421,28 @@ def add_submission(submission_data):
         st.error(f"Error saving submission: {e}")
         return None
 
+def delete_submission(submission_id, file_path=None):
+    """Delete submission record and associated file."""
+    try:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+        supabase.table('submissions').delete().eq('submission_id', submission_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting submission: {e}")
+        return False
+
+def delete_activity(activity_id, file_path=None):
+    """Delete activity record and associated file."""
+    try:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+        supabase.table('activities').delete().eq('activity_id', activity_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting activity: {e}")
+        return False
+
 def get_student_submissions(student_id):
     try:
         result = supabase.table('submissions').select('*').eq('student_id', student_id).order('date', desc=True).execute()
@@ -450,6 +472,7 @@ def get_all_submissions_for_teacher():
                 'ai_confidence': s['ai_confidence'],
                 'ai_feedback': s['ai_feedback'],
                 'plagiarism_score': s['plagiarism_score'],
+                'points_earned': s['points_earned'],
                 'student_name': s['students']['name'],
                 'reg_no': s['students']['reg_no'],
                 'class': s['students']['class']
@@ -1406,6 +1429,15 @@ elif st.session_state.user_role == "student":
                             st.markdown("---")
                             st.write("**📄 Preview:**")
                             st.markdown(preview, unsafe_allow_html=True)
+                    
+                    # Delete button for student
+                    st.markdown("---")
+                    if st.button(f"🗑️ Delete Submission", key=f"del_sub_{row['submission_id']}"):
+                        if delete_submission(row['submission_id'], row['file_path']):
+                            st.success("Submission deleted successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete submission.")
         else:
             st.info("No submissions found.")
 
@@ -1420,7 +1452,7 @@ elif st.session_state.user_role == "student":
                 if row['file_path'] and os.path.exists(row['file_path']):
                     found = True
                     with st.container():
-                        col1, col2, col3 = st.columns([3,1,1])
+                        col1, col2, col3, col4 = st.columns([3,1,1,1])
                         col1.write(f"**{row['title']}** ({row['subject']})\n📅 {row['date']} | 📄 {row['file_name']}")
                         dl = get_file_download_link(row['file_path'], row['file_name'])
                         if dl:
@@ -1429,6 +1461,10 @@ elif st.session_state.user_role == "student":
                             preview = get_file_view_link(row['file_path'], row['file_name'], row['file_type'])
                             if preview:
                                 st.session_state.view_content = preview
+                        if col4.button("🗑️ Delete", key=f"del_sub_file_{row['submission_id']}"):
+                            if delete_submission(row['submission_id'], row['file_path']):
+                                st.success("File deleted!")
+                                st.rerun()
             if not found:
                 st.info("No files uploaded yet.")
         with tab2:
@@ -1439,7 +1475,7 @@ elif st.session_state.user_role == "student":
                 if row['file_path'] and os.path.exists(row['file_path']):
                     found = True
                     with st.container():
-                        col1, col2, col3 = st.columns([3,1,1])
+                        col1, col2, col3, col4 = st.columns([3,1,1,1])
                         col1.write(f"**{row['topic']}** ({row['activity_type']})\n📅 {row['date']} | 📄 {row['file_name']}")
                         dl = get_file_download_link(row['file_path'], row['file_name'])
                         if dl:
@@ -1448,6 +1484,10 @@ elif st.session_state.user_role == "student":
                             preview = get_file_view_link(row['file_path'], row['file_name'], None)
                             if preview:
                                 st.session_state.view_content = preview
+                        if col4.button("🗑️ Delete", key=f"del_act_file_{row['activity_id']}"):
+                            if delete_activity(row['activity_id'], row['file_path']):
+                                st.success("Activity deleted!")
+                                st.rerun()
             if not found:
                 st.info("No activity files uploaded yet.")
         if 'view_content' in st.session_state:
@@ -1700,100 +1740,90 @@ elif st.session_state.user_role == "teacher":
         st.header("📂 Student Work for Evaluation")
         tab1, tab2 = st.tabs(["📝 Assignments (Submissions)", "🎯 Extra Activities"])
 
-        # ---------- TAB 1: ASSIGNMENTS ----------
+        # ---------- TAB 1: ASSIGNMENTS (TABLE FORMAT WITH DELETE) ----------
         with tab1:
             subs_df = get_all_submissions_for_teacher()
             if not subs_df.empty:
-                col1, col2 = st.columns(2)
+                # Filters
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     class_filter = st.selectbox("Filter by Class", ["All"] + subs_df['class'].unique().tolist(), key="assign_class")
                 with col2:
                     subject_filter = st.selectbox("Filter by Subject", ["All"] + subs_df['subject'].unique().tolist(), key="assign_subj")
+                with col3:
+                    student_filter = st.selectbox("Filter by Student", ["All"] + subs_df['student_name'].unique().tolist(), key="assign_student")
+                
                 filtered = subs_df.copy()
                 if class_filter != "All":
                     filtered = filtered[filtered['class'] == class_filter]
                 if subject_filter != "All":
                     filtered = filtered[filtered['subject'] == subject_filter]
+                if student_filter != "All":
+                    filtered = filtered[filtered['student_name'] == student_filter]
+                
                 st.write(f"**Total Assignments:** {len(filtered)}")
-                for _, row in filtered.iterrows():
-                    with st.expander(f"📄 {row['title']} - {row['student_name']} ({row['date']})"):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**Student:** {row['student_name']} ({row['reg_no']})")
-                            st.write(f"**Class:** {row['class']}")
-                            st.write(f"**Subject:** {row['subject']}")
-                            st.write(f"**Type:** {row['submission_type']}")
-                        with col2:
-                            st.write(f"**Date:** {row['date']}")
-                        if row['ai_confidence'] > 0:
-                            st.markdown("---")
-                            st.write("**🤖 AI Analysis:**")
-                            cola, colb, colc = st.columns(3)
-                            cola.metric("AI Confidence", f"{row['ai_confidence']*100:.0f}%")
-                            colb.metric("Originality", f"{(1-row['plagiarism_score'])*100:.0f}%")
-                            if row['ai_feedback']:
-                                st.info(f"📝 {row['ai_feedback']}")
-                        if row['file_path'] and os.path.exists(row['file_path']):
-                            st.markdown("---")
-                            st.write("**📎 Attached File:**")
-                            dl = get_file_download_link(row['file_path'], row['file_name'] or "file")
-                            if dl:
-                                st.markdown(dl, unsafe_allow_html=True)
-                            if st.button(f"👁️ Preview", key=f"preview_assign_{row['submission_id']}"):
-                                preview = get_file_view_link(row['file_path'], row['file_name'], row['file_type'])
-                                if preview:
-                                    st.session_state.teacher_view = preview
-                        if st.session_state.get('teacher_view'):
-                            st.markdown("---")
-                            st.markdown(st.session_state.teacher_view, unsafe_allow_html=True)
-                            if st.button("Close Preview"):
-                                del st.session_state.teacher_view
+                
+                # Display as table with delete button
+                display_df = filtered[['student_name', 'reg_no', 'class', 'subject', 'title', 'date', 'submission_type', 'points_earned']].copy()
+                display_df.columns = ['Student', 'Reg No', 'Class', 'Subject', 'Title', 'Date', 'Type', 'Points']
+                
+                # Add delete column as button
+                for idx, row in filtered.iterrows():
+                    col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2,1.5,1.5,2,2,1.5,1.5,1,1])
+                    col1.write(row['student_name'])
+                    col2.write(row['reg_no'])
+                    col3.write(row['class'])
+                    col4.write(row['subject'])
+                    col5.write(row['title'])
+                    col6.write(row['date'])
+                    col7.write(row['submission_type'])
+                    col8.write(str(row['points_earned']))
+                    if col9.button("🗑️", key=f"del_sub_teacher_{row['submission_id']}"):
+                        if delete_submission(row['submission_id'], row['file_path']):
+                            st.success(f"Deleted submission: {row['title']}")
+                            st.rerun()
+                st.markdown("---")
+                st.caption("Click 🗑️ to delete any submission (file removed from storage).")
             else:
                 st.info("No assignment submissions found.")
 
-        # ---------- TAB 2: EXTRA ACTIVITIES ----------
+        # ---------- TAB 2: EXTRA ACTIVITIES (TABLE FORMAT WITH DELETE) ----------
         with tab2:
             acts_df = get_all_activities_for_teacher()
             if not acts_df.empty:
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     class_filter_act = st.selectbox("Filter by Class", ["All"] + acts_df['class'].unique().tolist(), key="act_class")
                 with col2:
                     type_filter = st.selectbox("Filter by Activity Type", ["All"] + acts_df['activity_type'].unique().tolist(), key="act_type")
+                with col3:
+                    student_filter_act = st.selectbox("Filter by Student", ["All"] + acts_df['student_name'].unique().tolist(), key="act_student")
+                
                 filtered_act = acts_df.copy()
                 if class_filter_act != "All":
                     filtered_act = filtered_act[filtered_act['class'] == class_filter_act]
                 if type_filter != "All":
                     filtered_act = filtered_act[filtered_act['activity_type'] == type_filter]
+                if student_filter_act != "All":
+                    filtered_act = filtered_act[filtered_act['student_name'] == student_filter_act]
+                
                 st.write(f"**Total Extra Activities:** {len(filtered_act)}")
-                for _, row in filtered_act.iterrows():
-                    with st.expander(f"🎯 {row['topic']} - {row['student_name']} ({row['date']})"):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**Student:** {row['student_name']} ({row['reg_no']})")
-                            st.write(f"**Class:** {row['class']}")
-                            st.write(f"**Activity Type:** {row['activity_type']}")
-                            st.write(f"**Duration:** {row['duration_minutes']} minutes")
-                        with col2:
-                            st.write(f"**Date:** {row['date']}")
-                            st.write(f"**Points Earned:** {row['points_earned']}")
-                            if row['remarks']:
-                                st.write(f"**Remarks:** {row['remarks']}")
-                        if row['file_path'] and os.path.exists(row['file_path']):
-                            st.markdown("---")
-                            st.write("**📎 Attached Document:**")
-                            dl = get_file_download_link(row['file_path'], row['file_name'] or "file")
-                            if dl:
-                                st.markdown(dl, unsafe_allow_html=True)
-                            if st.button(f"👁️ Preview Activity", key=f"preview_act_{row['activity_id']}"):
-                                preview = get_file_view_link(row['file_path'], row['file_name'], None)
-                                if preview:
-                                    st.session_state.teacher_act_view = preview
-                        if st.session_state.get('teacher_act_view'):
-                            st.markdown("---")
-                            st.markdown(st.session_state.teacher_act_view, unsafe_allow_html=True)
-                            if st.button("Close Activity Preview"):
-                                del st.session_state.teacher_act_view
+                
+                for idx, row in filtered_act.iterrows():
+                    col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2,1.5,1.5,2,2,1.5,1,1])
+                    col1.write(row['student_name'])
+                    col2.write(row['reg_no'])
+                    col3.write(row['class'])
+                    col4.write(row['activity_type'])
+                    col5.write(row['topic'])
+                    col6.write(row['date'])
+                    col7.write(str(row['points_earned']))
+                    if col8.button("🗑️", key=f"del_act_teacher_{row['activity_id']}"):
+                        if delete_activity(row['activity_id'], row['file_path']):
+                            st.success(f"Deleted activity: {row['topic']}")
+                            st.rerun()
+                st.markdown("---")
+                st.caption("Click 🗑️ to delete any extra activity (file removed from storage).")
             else:
                 st.info("No extra activities submitted yet.")
 
@@ -2009,7 +2039,7 @@ st.markdown("""
     <p style='margin: 5px 0; font-weight: bold;'>Continuous Student Evaluation & Monitoring System</p>
     <p style='margin: 3px 0;'>Design and Maintained by: S P Sajjan, Assistant Professor, GFGCW, Jamkhandi</p>
     <p style='margin: 3px 0;'>📧 Contact: sajjanvsl@gmail.com | 📞 Help Desk: 9008802403</p>
-    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention</p>
+    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 🗑️ Delete Submissions</p>
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
