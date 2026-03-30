@@ -458,6 +458,35 @@ def get_all_submissions_for_teacher():
     except Exception as e:
         return pd.DataFrame()
 
+def get_all_activities_for_teacher():
+    """Fetch all extra activities with student details for teacher view."""
+    try:
+        result = supabase.table('activities').select(
+            '*, students(name, reg_no, class)'
+        ).order('date', desc=True).execute()
+        if not result.data:
+            return pd.DataFrame()
+        rows = []
+        for act in result.data:
+            rows.append({
+                'activity_id': act['activity_id'],
+                'activity_type': act['activity_type'],
+                'topic': act['topic'],
+                'date': act['date'],
+                'duration_minutes': act['duration_minutes'],
+                'remarks': act['remarks'],
+                'points_earned': act['points_earned'],
+                'file_path': act['file_path'],
+                'file_name': act['file_name'],
+                'student_name': act['students']['name'],
+                'reg_no': act['students']['reg_no'],
+                'class': act['students']['class']
+            })
+        return pd.DataFrame(rows)
+    except Exception as e:
+        st.error(f"Error fetching activities: {e}")
+        return pd.DataFrame()
+
 def add_activity(activity_data):
     try:
         supabase.table('activities').insert(activity_data).execute()
@@ -1668,55 +1697,105 @@ elif st.session_state.user_role == "teacher":
             st.info("No students found.")
 
     elif st.session_state.page == "📂 View Submissions":
-        st.header("📂 Student Submissions with AI Analysis")
-        subs_df = get_all_submissions_for_teacher()
-        if not subs_df.empty:
-            col1, col2 = st.columns(2)
-            with col1:
-                class_filter = st.selectbox("Filter by Class", ["All"] + subs_df['class'].unique().tolist())
-            with col2:
-                subject_filter = st.selectbox("Filter by Subject", ["All"] + subs_df['subject'].unique().tolist())
-            filtered = subs_df.copy()
-            if class_filter != "All":
-                filtered = filtered[filtered['class'] == class_filter]
-            if subject_filter != "All":
-                filtered = filtered[filtered['subject'] == subject_filter]
-            st.write(f"**Total Submissions:** {len(filtered)}")
-            for _, row in filtered.iterrows():
-                with st.expander(f"📄 {row['title']} - {row['student_name']} ({row['date']})"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write(f"**Student:** {row['student_name']} ({row['reg_no']})")
-                        st.write(f"**Class:** {row['class']}")
-                        st.write(f"**Subject:** {row['subject']}")
-                        st.write(f"**Type:** {row['submission_type']}")
-                    with col2:
-                        st.write(f"**Date:** {row['date']}")
-                    if row['ai_confidence'] > 0:
-                        st.markdown("---")
-                        st.write("**🤖 AI Analysis:**")
-                        cola, colb, colc = st.columns(3)
-                        cola.metric("AI Confidence", f"{row['ai_confidence']*100:.0f}%")
-                        colb.metric("Originality", f"{(1-row['plagiarism_score'])*100:.0f}%")
-                        if row['ai_feedback']:
-                            st.info(f"📝 {row['ai_feedback']}")
-                    if row['file_path'] and os.path.exists(row['file_path']):
-                        st.markdown("---")
-                        st.write("**📎 Attached File:**")
-                        dl = get_file_download_link(row['file_path'], row['file_name'] or "file")
-                        if dl:
-                            st.markdown(dl, unsafe_allow_html=True)
-                        if st.button(f"👁️ Preview", key=f"preview_{row['submission_id']}"):
-                            preview = get_file_view_link(row['file_path'], row['file_name'], row['file_type'])
-                            if preview:
-                                st.session_state.teacher_view = preview
-                    if st.session_state.get('teacher_view'):
-                        st.markdown("---")
-                        st.markdown(st.session_state.teacher_view, unsafe_allow_html=True)
-                        if st.button("Close Preview"):
-                            del st.session_state.teacher_view
-        else:
-            st.info("No submissions found.")
+        st.header("📂 Student Work for Evaluation")
+        tab1, tab2 = st.tabs(["📝 Assignments (Submissions)", "🎯 Extra Activities"])
+
+        # ---------- TAB 1: ASSIGNMENTS ----------
+        with tab1:
+            subs_df = get_all_submissions_for_teacher()
+            if not subs_df.empty:
+                col1, col2 = st.columns(2)
+                with col1:
+                    class_filter = st.selectbox("Filter by Class", ["All"] + subs_df['class'].unique().tolist(), key="assign_class")
+                with col2:
+                    subject_filter = st.selectbox("Filter by Subject", ["All"] + subs_df['subject'].unique().tolist(), key="assign_subj")
+                filtered = subs_df.copy()
+                if class_filter != "All":
+                    filtered = filtered[filtered['class'] == class_filter]
+                if subject_filter != "All":
+                    filtered = filtered[filtered['subject'] == subject_filter]
+                st.write(f"**Total Assignments:** {len(filtered)}")
+                for _, row in filtered.iterrows():
+                    with st.expander(f"📄 {row['title']} - {row['student_name']} ({row['date']})"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Student:** {row['student_name']} ({row['reg_no']})")
+                            st.write(f"**Class:** {row['class']}")
+                            st.write(f"**Subject:** {row['subject']}")
+                            st.write(f"**Type:** {row['submission_type']}")
+                        with col2:
+                            st.write(f"**Date:** {row['date']}")
+                        if row['ai_confidence'] > 0:
+                            st.markdown("---")
+                            st.write("**🤖 AI Analysis:**")
+                            cola, colb, colc = st.columns(3)
+                            cola.metric("AI Confidence", f"{row['ai_confidence']*100:.0f}%")
+                            colb.metric("Originality", f"{(1-row['plagiarism_score'])*100:.0f}%")
+                            if row['ai_feedback']:
+                                st.info(f"📝 {row['ai_feedback']}")
+                        if row['file_path'] and os.path.exists(row['file_path']):
+                            st.markdown("---")
+                            st.write("**📎 Attached File:**")
+                            dl = get_file_download_link(row['file_path'], row['file_name'] or "file")
+                            if dl:
+                                st.markdown(dl, unsafe_allow_html=True)
+                            if st.button(f"👁️ Preview", key=f"preview_assign_{row['submission_id']}"):
+                                preview = get_file_view_link(row['file_path'], row['file_name'], row['file_type'])
+                                if preview:
+                                    st.session_state.teacher_view = preview
+                        if st.session_state.get('teacher_view'):
+                            st.markdown("---")
+                            st.markdown(st.session_state.teacher_view, unsafe_allow_html=True)
+                            if st.button("Close Preview"):
+                                del st.session_state.teacher_view
+            else:
+                st.info("No assignment submissions found.")
+
+        # ---------- TAB 2: EXTRA ACTIVITIES ----------
+        with tab2:
+            acts_df = get_all_activities_for_teacher()
+            if not acts_df.empty:
+                col1, col2 = st.columns(2)
+                with col1:
+                    class_filter_act = st.selectbox("Filter by Class", ["All"] + acts_df['class'].unique().tolist(), key="act_class")
+                with col2:
+                    type_filter = st.selectbox("Filter by Activity Type", ["All"] + acts_df['activity_type'].unique().tolist(), key="act_type")
+                filtered_act = acts_df.copy()
+                if class_filter_act != "All":
+                    filtered_act = filtered_act[filtered_act['class'] == class_filter_act]
+                if type_filter != "All":
+                    filtered_act = filtered_act[filtered_act['activity_type'] == type_filter]
+                st.write(f"**Total Extra Activities:** {len(filtered_act)}")
+                for _, row in filtered_act.iterrows():
+                    with st.expander(f"🎯 {row['topic']} - {row['student_name']} ({row['date']})"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Student:** {row['student_name']} ({row['reg_no']})")
+                            st.write(f"**Class:** {row['class']}")
+                            st.write(f"**Activity Type:** {row['activity_type']}")
+                            st.write(f"**Duration:** {row['duration_minutes']} minutes")
+                        with col2:
+                            st.write(f"**Date:** {row['date']}")
+                            st.write(f"**Points Earned:** {row['points_earned']}")
+                            if row['remarks']:
+                                st.write(f"**Remarks:** {row['remarks']}")
+                        if row['file_path'] and os.path.exists(row['file_path']):
+                            st.markdown("---")
+                            st.write("**📎 Attached Document:**")
+                            dl = get_file_download_link(row['file_path'], row['file_name'] or "file")
+                            if dl:
+                                st.markdown(dl, unsafe_allow_html=True)
+                            if st.button(f"👁️ Preview Activity", key=f"preview_act_{row['activity_id']}"):
+                                preview = get_file_view_link(row['file_path'], row['file_name'], None)
+                                if preview:
+                                    st.session_state.teacher_act_view = preview
+                        if st.session_state.get('teacher_act_view'):
+                            st.markdown("---")
+                            st.markdown(st.session_state.teacher_act_view, unsafe_allow_html=True)
+                            if st.button("Close Activity Preview"):
+                                del st.session_state.teacher_act_view
+            else:
+                st.info("No extra activities submitted yet.")
 
     elif st.session_state.page == "🤖 AI Reference Answers":
         st.header("🤖 AI Reference Answers Management")
