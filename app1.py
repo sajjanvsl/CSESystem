@@ -71,6 +71,14 @@ if 'show_deletion' not in st.session_state:
     st.session_state.show_deletion = False
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
+if 'edit_submission_id' not in st.session_state:
+    st.session_state.edit_submission_id = None
+if 'edit_activity_id' not in st.session_state:
+    st.session_state.edit_activity_id = None
+if 'view_submission' not in st.session_state:
+    st.session_state.view_submission = None
+if 'view_activity' not in st.session_state:
+    st.session_state.view_activity = None
 
 # ---------- Helper functions ----------
 def hash_password(password):
@@ -222,15 +230,38 @@ def faculty_edit_student(student_id, reg_no, name, class_name, email, phone, pas
         st.error(f"Error: {e}")
         return False
 
-def delete_student(student_id):
+def delete_student_complete(student_id, student_reg_no):
+    """Complete deletion of student and all associated data with file cleanup."""
     try:
+        # Get all submissions with file paths
+        submissions = supabase.table('submissions').select('file_path').eq('student_id', student_id).execute()
+        for sub in submissions.data:
+            if sub.get('file_path') and os.path.exists(sub['file_path']):
+                os.remove(sub['file_path'])
+        
+        # Get all activities with file paths
+        activities = supabase.table('activities').select('file_path').eq('student_id', student_id).execute()
+        for act in activities.data:
+            if act.get('file_path') and os.path.exists(act['file_path']):
+                os.remove(act['file_path'])
+        
+        # Delete from all related tables
         supabase.table('submissions').delete().eq('student_id', student_id).execute()
         supabase.table('activities').delete().eq('student_id', student_id).execute()
         supabase.table('daily_activity').delete().eq('student_id', student_id).execute()
         supabase.table('rewards').delete().eq('student_id', student_id).execute()
         supabase.table('point_transactions').delete().eq('student_id', student_id).execute()
         supabase.table('student_subjects').delete().eq('student_id', student_id).execute()
+        
+        # Delete student folder from uploads
+        student_folder = Path("uploads") / student_reg_no
+        if student_folder.exists():
+            import shutil
+            shutil.rmtree(student_folder)
+        
+        # Finally delete student record
         supabase.table('students').delete().eq('student_id', student_id).execute()
+        
         return True
     except Exception as e:
         st.error(f"Error deleting student: {e}")
@@ -421,8 +452,31 @@ def add_submission(submission_data):
         st.error(f"Error saving submission: {e}")
         return None
 
+def update_submission(submission_id, title, description, points_earned=None, grade=None):
+    try:
+        update_data = {'title': title, 'description': description}
+        if points_earned is not None:
+            update_data['points_earned'] = points_earned
+        if grade is not None:
+            update_data['grade'] = grade
+        result = supabase.table('submissions').update(update_data).eq('submission_id', submission_id).execute()
+        return result.data is not None
+    except Exception as e:
+        st.error(f"Error updating submission: {e}")
+        return False
+
+def update_activity(activity_id, topic, remarks, points_earned=None):
+    try:
+        update_data = {'topic': topic, 'remarks': remarks}
+        if points_earned is not None:
+            update_data['points_earned'] = points_earned
+        result = supabase.table('activities').update(update_data).eq('activity_id', activity_id).execute()
+        return result.data is not None
+    except Exception as e:
+        st.error(f"Error updating activity: {e}")
+        return False
+
 def delete_submission(submission_id, file_path=None):
-    """Delete submission record and associated file."""
     try:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
@@ -433,7 +487,6 @@ def delete_submission(submission_id, file_path=None):
         return False
 
 def delete_activity(activity_id, file_path=None):
-    """Delete activity record and associated file."""
     try:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
@@ -461,9 +514,11 @@ def get_all_submissions_for_teacher():
         for s in result.data:
             rows.append({
                 'submission_id': s['submission_id'],
+                'student_id': s['student_id'],
                 'submission_type': s['submission_type'],
                 'subject': s['subject'],
                 'title': s['title'],
+                'description': s['description'],
                 'date': s['date'],
                 'file_path': s['file_path'],
                 'file_name': s['file_name'],
@@ -473,6 +528,7 @@ def get_all_submissions_for_teacher():
                 'ai_feedback': s['ai_feedback'],
                 'plagiarism_score': s['plagiarism_score'],
                 'points_earned': s['points_earned'],
+                'grade': s['grade'],
                 'student_name': s['students']['name'],
                 'reg_no': s['students']['reg_no'],
                 'class': s['students']['class']
@@ -482,7 +538,6 @@ def get_all_submissions_for_teacher():
         return pd.DataFrame()
 
 def get_all_activities_for_teacher():
-    """Fetch all extra activities with student details for teacher view."""
     try:
         result = supabase.table('activities').select(
             '*, students(name, reg_no, class)'
@@ -493,6 +548,7 @@ def get_all_activities_for_teacher():
         for act in result.data:
             rows.append({
                 'activity_id': act['activity_id'],
+                'student_id': act['student_id'],
                 'activity_type': act['activity_type'],
                 'topic': act['topic'],
                 'date': act['date'],
@@ -597,7 +653,7 @@ def update_daily_activity(student_id, date, points, activity_type='submission'):
 
 def get_leaderboard(limit=20, class_filter=None):
     try:
-        query = supabase.table('students').select('reg_no, name, class, total_points, current_streak, best_streak')
+        query = supabase.table('students').select('student_id, reg_no, name, class, total_points, current_streak, best_streak')
         if class_filter and class_filter != "All Classes":
             query = query.eq('class', class_filter)
         result = query.order('total_points', desc=True).order('current_streak', desc=True).limit(limit).execute()
@@ -1429,7 +1485,7 @@ elif st.session_state.user_role == "student":
                             st.markdown("---")
                             st.write("**📄 Preview:**")
                             st.markdown(preview, unsafe_allow_html=True)
-                   
+                    
                     # Delete button for student
                     st.markdown("---")
                     if st.button(f"🗑️ Delete Submission", key=f"del_sub_{row['submission_id']}"):
@@ -1689,58 +1745,109 @@ elif st.session_state.user_role == "teacher":
 
     elif st.session_state.page == "👨‍🎓 Manage Students":
         st.header("Manage Students")
-        st.info("Faculty: You can edit all student details.")
-        students_df = get_all_students()
-        if not students_df.empty:
-            st.subheader("All Students")
-            st.dataframe(students_df[['reg_no','name','class','email','phone','total_points']], use_container_width=True)
-            st.markdown("---")
-            st.subheader("Edit Student Details (Faculty)")
-            col1, col2 = st.columns(2)
-            with col1:
-                selected_reg = st.selectbox("Select Student by Registration Number", students_df['reg_no'].tolist())
-                if selected_reg:
-                    student_data = students_df[students_df['reg_no']==selected_reg].iloc[0]
-                    student_id = student_data['student_id']
-                    with st.form("faculty_edit_student_form"):
-                        reg_no = st.text_input("Registration Number", value=student_data['reg_no'])
-                        name = st.text_input("Name", value=student_data['name'])
-                        class_name = st.text_input("Class", value=student_data['class'])
-                        email = st.text_input("Email", value=student_data['email'])
-                        phone = st.text_input("Phone", value=student_data['phone'])
-                        st.subheader("Reset Password (Optional)")
-                        new_password = st.text_input("New Password", type="password", help="Leave blank to keep current")
-                        if st.form_submit_button("💾 Update Student"):
-                            if reg_no and name and class_name and email:
-                                if faculty_edit_student(student_id, reg_no, name, class_name, email, phone, new_password if new_password else None):
-                                    st.rerun()
+        tab1, tab2 = st.tabs(["📝 Edit Student Details", "🗑️ Delete Student Accounts (Checkboxes)"])
+        
+        with tab1:
+            st.info("Faculty: You can edit all student details.")
+            students_df = get_all_students()
+            if not students_df.empty:
+                st.subheader("All Students")
+                st.dataframe(students_df[['reg_no','name','class','email','phone','total_points']], use_container_width=True)
+                st.markdown("---")
+                st.subheader("Edit Student Details (Faculty)")
+                col1, col2 = st.columns(2)
+                with col1:
+                    selected_reg = st.selectbox("Select Student by Registration Number", students_df['reg_no'].tolist())
+                    if selected_reg:
+                        student_data = students_df[students_df['reg_no']==selected_reg].iloc[0]
+                        student_id = student_data['student_id']
+                        with st.form("faculty_edit_student_form"):
+                            reg_no = st.text_input("Registration Number", value=student_data['reg_no'])
+                            name = st.text_input("Name", value=student_data['name'])
+                            class_name = st.text_input("Class", value=student_data['class'])
+                            email = st.text_input("Email", value=student_data['email'])
+                            phone = st.text_input("Phone", value=student_data['phone'])
+                            st.subheader("Reset Password (Optional)")
+                            new_password = st.text_input("New Password", type="password", help="Leave blank to keep current")
+                            if st.form_submit_button("💾 Update Student"):
+                                if reg_no and name and class_name and email:
+                                    if faculty_edit_student(student_id, reg_no, name, class_name, email, phone, new_password if new_password else None):
+                                        st.rerun()
+                                else:
+                                    st.error("Please fill all required fields.")
+                with col2:
+                    if selected_reg:
+                        student = supabase.table('students').select('*').eq('reg_no', selected_reg).execute().data[0]
+                        st.subheader("Student Details")
+                        st.info(f"**Reg No:** {student['reg_no']}\n**Name:** {student['name']}\n**Class:** {student['class']}\n**Email:** {student['email']}\n**Phone:** {student['phone']}\n**Total Points:** {student['total_points']}\n**Current Streak:** {student['current_streak']} days")
+                        with st.expander("View Registered Subjects"):
+                            subj = get_student_subjects(student['student_id'])
+                            if not subj.empty:
+                                st.dataframe(subj[['subject_code','subject_name','teacher_name']])
                             else:
-                                st.error("Please fill all required fields.")
-            with col2:
-                if selected_reg:
-                    student = supabase.table('students').select('*').eq('reg_no', selected_reg).execute().data[0]
-                    st.subheader("Student Details")
-                    st.info(f"**Reg No:** {student['reg_no']}\n**Name:** {student['name']}\n**Class:** {student['class']}\n**Email:** {student['email']}\n**Phone:** {student['phone']}\n**Total Points:** {student['total_points']}\n**Current Streak:** {student['current_streak']} days")
-                    with st.expander("View Registered Subjects"):
-                        subj = get_student_subjects(student['student_id'])
-                        if not subj.empty:
-                            st.dataframe(subj[['subject_code','subject_name','teacher_name']])
-                        else:
-                            st.info("No subjects registered.")
-                    with st.expander("View Student Submissions"):
-                        subs = get_student_submissions(student['student_id'])
-                        if not subs.empty:
-                            st.dataframe(subs[['submission_type','subject','title','date','grade','points_earned']])
-                        else:
-                            st.info("No submissions yet.")
-        else:
-            st.info("No students found.")
+                                st.info("No subjects registered.")
+                        with st.expander("View Student Submissions"):
+                            subs = get_student_submissions(student['student_id'])
+                            if not subs.empty:
+                                st.dataframe(subs[['submission_type','subject','title','date','grade','points_earned']])
+                            else:
+                                st.info("No submissions yet.")
+            else:
+                st.info("No students found.")
+        
+        with tab2:
+            st.warning("⚠️ **Warning: Student Deletion** - This action is permanent and cannot be undone!")
+            st.info("Deleting a student will remove:\n- All submissions and uploaded files\n- All activities\n- All points and rewards\n- All subject registrations\n- The student account itself")
+            
+            students_df = get_all_students()
+            if not students_df.empty:
+                # Show duplicate registrations warning
+                duplicate_check = students_df.groupby(['name', 'class']).size().reset_index(name='count')
+                duplicates = duplicate_check[duplicate_check['count'] > 1]
+                if not duplicates.empty:
+                    st.error("⚠️ **Duplicate Registrations Detected!**")
+                    st.write("The following students have multiple registrations:")
+                    for _, dup in duplicates.iterrows():
+                        st.write(f"- **{dup['name']}** in **{dup['class']}** (Registered {dup['count']} times)")
+                
+                st.subheader("Select Students to Delete")
+                # Create checkboxes for each student
+                selected_students = []
+                for idx, row in students_df.iterrows():
+                    checkbox_label = f"{row['reg_no']} - {row['name']} ({row['class']}) - Points: {row['total_points']}"
+                    if st.checkbox(checkbox_label, key=f"del_{row['student_id']}"):
+                        selected_students.append(row)
+                
+                if selected_students:
+                    st.subheader("Students Selected for Deletion")
+                    for s in selected_students:
+                        st.write(f"- {s['name']} (Reg: {s['reg_no']}, Class: {s['class']})")
+                    
+                    if st.button("🗑️ **DELETE SELECTED STUDENTS**", type="primary"):
+                        with st.spinner("Deleting students..."):
+                            deleted_count = 0
+                            for student in selected_students:
+                                if delete_student_complete(student['student_id'], student['reg_no']):
+                                    deleted_count += 1
+                            if deleted_count > 0:
+                                st.success(f"✅ Successfully deleted {deleted_count} student(s)!")
+                                st.balloons()
+                                st.rerun()
+                            else:
+                                st.error("Failed to delete students. Please try again.")
+                else:
+                    st.info("No students selected. Use the checkboxes above to select students for deletion.")
+                
+                st.markdown("---")
+                st.caption("💡 Tip: Check multiple students at once to delete them in bulk. All their data will be permanently removed.")
+            else:
+                st.info("No students found in the system.")
 
     elif st.session_state.page == "📂 View Submissions":
-        st.header("📂 Student Work for Evaluation")
+        st.header("📂 Student Work for Evaluation - View, Edit & Delete")
         tab1, tab2 = st.tabs(["📝 Assignments (Submissions)", "🎯 Extra Activities"])
 
-        # ---------- TAB 1: ASSIGNMENTS (TABLE FORMAT WITH DELETE) ----------
+        # ---------- TAB 1: ASSIGNMENTS ----------
         with tab1:
             subs_df = get_all_submissions_for_teacher()
             if not subs_df.empty:
@@ -1752,7 +1859,7 @@ elif st.session_state.user_role == "teacher":
                     subject_filter = st.selectbox("Filter by Subject", ["All"] + subs_df['subject'].unique().tolist(), key="assign_subj")
                 with col3:
                     student_filter = st.selectbox("Filter by Student", ["All"] + subs_df['student_name'].unique().tolist(), key="assign_student")
-               
+                
                 filtered = subs_df.copy()
                 if class_filter != "All":
                     filtered = filtered[filtered['class'] == class_filter]
@@ -1760,34 +1867,99 @@ elif st.session_state.user_role == "teacher":
                     filtered = filtered[filtered['subject'] == subject_filter]
                 if student_filter != "All":
                     filtered = filtered[filtered['student_name'] == student_filter]
-               
+                
                 st.write(f"**Total Assignments:** {len(filtered)}")
-               
-                # Display as table with delete button
-                display_df = filtered[['student_name', 'reg_no', 'class', 'subject', 'title', 'date', 'submission_type', 'points_earned']].copy()
-                display_df.columns = ['Student', 'Reg No', 'Class', 'Subject', 'Title', 'Date', 'Type', 'Points']
-               
-                # Add delete column as button
+                
+                # Create a clean table with all actions in the same row
                 for idx, row in filtered.iterrows():
-                    col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([2,1.5,1.5,2,2,1.5,1.5,1,1])
-                    col1.write(row['student_name'])
-                    col2.write(row['reg_no'])
-                    col3.write(row['class'])
-                    col4.write(row['subject'])
-                    col5.write(row['title'])
-                    col6.write(row['date'])
-                    col7.write(row['submission_type'])
-                    col8.write(str(row['points_earned']))
-                    if col9.button("🗑️", key=f"del_sub_teacher_{row['submission_id']}"):
-                        if delete_submission(row['submission_id'], row['file_path']):
-                            st.success(f"Deleted submission: {row['title']}")
+                    with st.container():
+                        cols = st.columns([1.2, 1.2, 1.2, 1.5, 2, 1, 1, 1, 0.8, 0.8, 0.8])
+                        cols[0].write(row['student_name'])
+                        cols[1].write(row['reg_no'])
+                        cols[2].write(row['class'])
+                        cols[3].write(row['subject'])
+                        cols[4].write(row['title'][:40] + "..." if len(row['title']) > 40 else row['title'])
+                        cols[5].write(row['date'])
+                        cols[6].write(str(row['points_earned']))
+                        cols[7].write(row['grade'] if row.get('grade') else "N/A")
+                        
+                        # View button
+                        if cols[8].button("👁️", key=f"view_sub_{row['submission_id']}", help="View Details"):
+                            st.session_state.view_submission = row.to_dict()
                             st.rerun()
+                        
+                        # Edit button
+                        if cols[9].button("✏️", key=f"edit_sub_{row['submission_id']}", help="Edit"):
+                            st.session_state.edit_submission_id = row['submission_id']
+                            st.session_state.edit_submission_data = row.to_dict()
+                            st.rerun()
+                        
+                        # Delete button
+                        if cols[10].button("🗑️", key=f"del_sub_{row['submission_id']}", help="Delete Submission"):
+                            if delete_submission(row['submission_id'], row['file_path']):
+                                st.success(f"Deleted submission: {row['title']}")
+                                st.rerun()
+                            else:
+                                st.error("Failed to delete submission.")
+                        
+                        st.markdown("---")
+                
+                # View Submission Modal
+                if st.session_state.view_submission is not None:
+                    st.subheader("📄 Submission Details")
+                    v = st.session_state.view_submission
+                    st.write(f"**Student:** {v['student_name']} ({v['reg_no']})")
+                    st.write(f"**Class:** {v['class']}")
+                    st.write(f"**Subject:** {v['subject']}")
+                    st.write(f"**Type:** {v['submission_type']}")
+                    st.write(f"**Title:** {v['title']}")
+                    st.write(f"**Date:** {v['date']}")
+                    st.write(f"**Description:** {v['description']}")
+                    st.write(f"**Points Earned:** {v['points_earned']}")
+                    st.write(f"**Grade:** {v.get('grade', 'N/A')}")
+                    if v.get('ai_confidence'):
+                        st.write(f"**AI Confidence:** {v['ai_confidence']*100:.0f}%")
+                        st.write(f"**Plagiarism Score:** {v['plagiarism_score']*100:.0f}%")
+                        st.write(f"**AI Feedback:** {v['ai_feedback']}")
+                    if v.get('file_path') and os.path.exists(v['file_path']):
+                        st.write("**File:**")
+                        dl = get_file_download_link(v['file_path'], v['file_name'])
+                        if dl:
+                            st.markdown(dl, unsafe_allow_html=True)
+                    if st.button("Close View"):
+                        st.session_state.view_submission = None
+                        st.rerun()
+                
+                # Edit Submission Modal
+                if st.session_state.edit_submission_id is not None:
+                    st.subheader("✏️ Edit Submission")
+                    ed = st.session_state.edit_submission_data
+                    with st.form(key=f"edit_sub_form_{st.session_state.edit_submission_id}"):
+                        new_title = st.text_input("Title", value=ed['title'])
+                        new_description = st.text_area("Description", value=ed['description'], height=150)
+                        new_points = st.number_input("Points Earned", value=float(ed['points_earned']), step=1.0)
+                        new_grade = st.text_input("Grade", value=ed.get('grade', 'A'))
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.form_submit_button("💾 Save Changes"):
+                                if update_submission(st.session_state.edit_submission_id, new_title, new_description, new_points, new_grade):
+                                    st.success("Submission updated successfully!")
+                                    st.session_state.edit_submission_id = None
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to update submission.")
+                        with col2:
+                            if st.form_submit_button("❌ Cancel"):
+                                st.session_state.edit_submission_id = None
+                                st.rerun()
+                
                 st.markdown("---")
-                st.caption("Click 🗑️ to delete any submission (file removed from storage).")
+                st.caption("💡 Click 👁️ to view details, ✏️ to edit, 🗑️ to delete")
             else:
                 st.info("No assignment submissions found.")
 
-        # ---------- TAB 2: EXTRA ACTIVITIES (TABLE FORMAT WITH DELETE) ----------
+        # ---------- TAB 2: EXTRA ACTIVITIES ----------
         with tab2:
             acts_df = get_all_activities_for_teacher()
             if not acts_df.empty:
@@ -1798,7 +1970,7 @@ elif st.session_state.user_role == "teacher":
                     type_filter = st.selectbox("Filter by Activity Type", ["All"] + acts_df['activity_type'].unique().tolist(), key="act_type")
                 with col3:
                     student_filter_act = st.selectbox("Filter by Student", ["All"] + acts_df['student_name'].unique().tolist(), key="act_student")
-               
+                
                 filtered_act = acts_df.copy()
                 if class_filter_act != "All":
                     filtered_act = filtered_act[filtered_act['class'] == class_filter_act]
@@ -1806,24 +1978,87 @@ elif st.session_state.user_role == "teacher":
                     filtered_act = filtered_act[filtered_act['activity_type'] == type_filter]
                 if student_filter_act != "All":
                     filtered_act = filtered_act[filtered_act['student_name'] == student_filter_act]
-               
+                
                 st.write(f"**Total Extra Activities:** {len(filtered_act)}")
-               
+                
                 for idx, row in filtered_act.iterrows():
-                    col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2,1.5,1.5,2,2,1.5,1,1])
-                    col1.write(row['student_name'])
-                    col2.write(row['reg_no'])
-                    col3.write(row['class'])
-                    col4.write(row['activity_type'])
-                    col5.write(row['topic'])
-                    col6.write(row['date'])
-                    col7.write(str(row['points_earned']))
-                    if col8.button("🗑️", key=f"del_act_teacher_{row['activity_id']}"):
-                        if delete_activity(row['activity_id'], row['file_path']):
-                            st.success(f"Deleted activity: {row['topic']}")
+                    with st.container():
+                        cols = st.columns([1.2, 1.2, 1.2, 1.5, 2, 1, 1, 0.8, 0.8, 0.8])
+                        cols[0].write(row['student_name'])
+                        cols[1].write(row['reg_no'])
+                        cols[2].write(row['class'])
+                        cols[3].write(row['activity_type'])
+                        cols[4].write(row['topic'][:40] + "..." if len(row['topic']) > 40 else row['topic'])
+                        cols[5].write(row['date'])
+                        cols[6].write(str(row['points_earned']))
+                        
+                        # View button
+                        if cols[7].button("👁️", key=f"view_act_{row['activity_id']}", help="View Details"):
+                            st.session_state.view_activity = row.to_dict()
                             st.rerun()
+                        
+                        # Edit button
+                        if cols[8].button("✏️", key=f"edit_act_{row['activity_id']}", help="Edit"):
+                            st.session_state.edit_activity_id = row['activity_id']
+                            st.session_state.edit_activity_data = row.to_dict()
+                            st.rerun()
+                        
+                        # Delete button
+                        if cols[9].button("🗑️", key=f"del_act_{row['activity_id']}", help="Delete Activity"):
+                            if delete_activity(row['activity_id'], row['file_path']):
+                                st.success(f"Deleted activity: {row['topic']}")
+                                st.rerun()
+                            else:
+                                st.error("Failed to delete activity.")
+                        
+                        st.markdown("---")
+                
+                # View Activity Modal
+                if st.session_state.view_activity is not None:
+                    st.subheader("📄 Activity Details")
+                    v = st.session_state.view_activity
+                    st.write(f"**Student:** {v['student_name']} ({v['reg_no']})")
+                    st.write(f"**Class:** {v['class']}")
+                    st.write(f"**Activity Type:** {v['activity_type']}")
+                    st.write(f"**Topic:** {v['topic']}")
+                    st.write(f"**Date:** {v['date']}")
+                    st.write(f"**Duration:** {v['duration_minutes']} minutes")
+                    st.write(f"**Points Earned:** {v['points_earned']}")
+                    st.write(f"**Remarks:** {v.get('remarks', 'N/A')}")
+                    if v.get('file_path') and os.path.exists(v['file_path']):
+                        st.write("**File:**")
+                        dl = get_file_download_link(v['file_path'], v['file_name'])
+                        if dl:
+                            st.markdown(dl, unsafe_allow_html=True)
+                    if st.button("Close View"):
+                        st.session_state.view_activity = None
+                        st.rerun()
+                
+                # Edit Activity Modal
+                if st.session_state.edit_activity_id is not None:
+                    st.subheader("✏️ Edit Activity")
+                    ed = st.session_state.edit_activity_data
+                    with st.form(key=f"edit_act_form_{st.session_state.edit_activity_id}"):
+                        new_topic = st.text_input("Topic", value=ed['topic'])
+                        new_remarks = st.text_area("Remarks", value=ed.get('remarks', ''), height=100)
+                        new_points = st.number_input("Points Earned", value=float(ed['points_earned']), step=1.0)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.form_submit_button("💾 Save Changes"):
+                                if update_activity(st.session_state.edit_activity_id, new_topic, new_remarks, new_points):
+                                    st.success("Activity updated successfully!")
+                                    st.session_state.edit_activity_id = None
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to update activity.")
+                        with col2:
+                            if st.form_submit_button("❌ Cancel"):
+                                st.session_state.edit_activity_id = None
+                                st.rerun()
+                
                 st.markdown("---")
-                st.caption("Click 🗑️ to delete any extra activity (file removed from storage).")
+                st.caption("💡 Click 👁️ to view details, ✏️ to edit, 🗑️ to delete")
             else:
                 st.info("No extra activities submitted yet.")
 
@@ -1864,7 +2099,6 @@ elif st.session_state.user_role == "teacher":
 
     elif st.session_state.page == "📊 Class Analytics":
         st.header("Class Analytics")
-        # Class performance
         class_perf = supabase.table('students').select('class, total_points').execute()
         if class_perf.data:
             df = pd.DataFrame(class_perf.data)
@@ -1877,7 +2111,6 @@ elif st.session_state.user_role == "teacher":
             ).reset_index().sort_values('avg_points', ascending=False)
             st.subheader("📈 Class Performance")
             st.dataframe(perf, use_container_width=True)
-        # AI metrics
         ai_metrics = supabase.table('submissions').select('ai_confidence, plagiarism_score').gt('ai_confidence', 0).execute()
         if ai_metrics.data:
             df_ai = pd.DataFrame(ai_metrics.data)
@@ -1886,7 +2119,6 @@ elif st.session_state.user_role == "teacher":
             col1.metric("Avg AI Confidence", f"{df_ai['ai_confidence'].mean()*100:.0f}%")
             col2.metric("Avg Originality", f"{(1-df_ai['plagiarism_score'].mean())*100:.0f}%")
             col3.metric("AI-Graded Submissions", len(df_ai))
-        # Subject distribution (fixed: added subject_id)
         subj_dist = supabase.table('student_subjects').select('subject_id').execute()
         if subj_dist.data:
             subj_ids = [s['subject_id'] for s in subj_dist.data]
@@ -2039,7 +2271,7 @@ st.markdown("""
     <p style='margin: 5px 0; font-weight: bold;'>Continuous Student Evaluation & Monitoring System</p>
     <p style='margin: 3px 0;'>Design and Maintained by: S P Sajjan, Assistant Professor, GFGCW, Jamkhandi</p>
     <p style='margin: 3px 0;'>📧 Contact: sajjanvsl@gmail.com | 📞 Help Desk: 9008802403</p>
-    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 🗑️ Delete Submissions</p>
+    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 👁️ View | ✏️ Edit | 🗑️ Delete (Bulk Student Deletion with Checkboxes)</p>
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
