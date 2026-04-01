@@ -9,15 +9,15 @@ import base64
 import re
 import numpy as np
 from pathlib import Path
+from io import BytesIO
 
-# --- Supabase imports ---
+# --- Optional imports with fallbacks ---
 try:
     from supabase import create_client, Client
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
 
-# --- sklearn for AI (optional) ---
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
@@ -29,6 +29,12 @@ except ImportError:
             return np.zeros((len(texts), 1))
     def cosine_similarity(a, b):
         return np.zeros((a.shape[0], b.shape[0]))
+
+try:
+    import openpyxl
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
 
 st.set_page_config(page_title="Student Evaluation System", page_icon="📚", layout="wide", initial_sidebar_state="expanded")
 
@@ -238,13 +244,13 @@ def delete_student_complete(student_id, student_reg_no):
         for sub in submissions.data:
             if sub.get('file_path') and os.path.exists(sub['file_path']):
                 os.remove(sub['file_path'])
-       
+        
         # Get all activities with file paths
         activities = supabase.table('activities').select('file_path').eq('student_id', student_id).execute()
         for act in activities.data:
             if act.get('file_path') and os.path.exists(act['file_path']):
                 os.remove(act['file_path'])
-       
+        
         # Delete from all related tables
         supabase.table('submissions').delete().eq('student_id', student_id).execute()
         supabase.table('activities').delete().eq('student_id', student_id).execute()
@@ -252,16 +258,16 @@ def delete_student_complete(student_id, student_reg_no):
         supabase.table('rewards').delete().eq('student_id', student_id).execute()
         supabase.table('point_transactions').delete().eq('student_id', student_id).execute()
         supabase.table('student_subjects').delete().eq('student_id', student_id).execute()
-       
+        
         # Delete student folder from uploads
         student_folder = Path("uploads") / student_reg_no
         if student_folder.exists():
             import shutil
             shutil.rmtree(student_folder)
-       
+        
         # Finally delete student record
         supabase.table('students').delete().eq('student_id', student_id).execute()
-       
+        
         return True
     except Exception as e:
         st.error(f"Error deleting student: {e}")
@@ -999,6 +1005,18 @@ def get_file_view_link(file_path, file_name, file_type):
                 return f'<pre style="background:#f5f5f5; padding:10px;">{content}</pre>'
     return None
 
+def export_to_excel(df, sheet_name="Data"):
+    """Convert dataframe to Excel bytes for download. Fallback to CSV if openpyxl missing."""
+    if OPENPYXL_AVAILABLE:
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+        return output.getvalue(), 'excel'
+    else:
+        output = BytesIO()
+        df.to_csv(output, index=False)
+        return output.getvalue(), 'csv'
+
 # ---------- Create uploads directory ----------
 Path("uploads").mkdir(exist_ok=True)
 
@@ -1006,7 +1024,7 @@ Path("uploads").mkdir(exist_ok=True)
 st.title("📚 Continuous Student Evaluation & Monitoring System")
 st.markdown("---")
 
-# Sidebar (unchanged)
+# Sidebar
 with st.sidebar:
     if st.session_state.user_role:
         if st.session_state.user_role == "student":
@@ -1485,7 +1503,7 @@ elif st.session_state.user_role == "student":
                             st.markdown("---")
                             st.write("**📄 Preview:**")
                             st.markdown(preview, unsafe_allow_html=True)
-                   
+                    
                     # Delete button for student
                     st.markdown("---")
                     if st.button(f"🗑️ Delete Submission", key=f"del_sub_{row['submission_id']}"):
@@ -1812,7 +1830,6 @@ elif st.session_state.user_role == "teacher":
 
                 # Prepare a DataFrame with a selection column
                 display_df = students_df[['reg_no', 'name', 'class', 'email', 'phone', 'total_points']].copy()
-                # Add a new column 'Select' with default False
                 display_df['Select'] = False
 
                 # Use st.data_editor to show a table with checkboxes
@@ -1868,7 +1885,7 @@ elif st.session_state.user_role == "teacher":
                     subject_filter = st.selectbox("Filter by Subject", ["All"] + subs_df['subject'].unique().tolist(), key="assign_subj")
                 with col3:
                     student_filter = st.selectbox("Filter by Student", ["All"] + subs_df['student_name'].unique().tolist(), key="assign_student")
-               
+                
                 filtered = subs_df.copy()
                 if class_filter != "All":
                     filtered = filtered[filtered['class'] == class_filter]
@@ -1876,10 +1893,33 @@ elif st.session_state.user_role == "teacher":
                     filtered = filtered[filtered['subject'] == subject_filter]
                 if student_filter != "All":
                     filtered = filtered[filtered['student_name'] == student_filter]
-               
+                
                 st.write(f"**Total Assignments:** {len(filtered)}")
-               
-                # Create a clean table with all actions in the same row
+                
+                # Excel download button
+                if not filtered.empty:
+                    export_df = filtered[['student_name', 'reg_no', 'class', 'subject', 'title', 'submission_type', 'date', 'points_earned', 'grade', 'ai_confidence', 'plagiarism_score']].copy()
+                    export_df.columns = ['Student Name', 'Reg No', 'Class', 'Subject', 'Title', 'Type', 'Date', 'Points', 'Grade', 'AI Confidence', 'Plagiarism Score']
+                    export_df['AI Confidence'] = (export_df['AI Confidence'] * 100).round(0).astype(str) + '%'
+                    export_df['Plagiarism Score'] = (export_df['Plagiarism Score'] * 100).round(0).astype(str) + '%'
+                    
+                    excel_data, file_type = export_to_excel(export_df, "Assignments")
+                    if file_type == 'excel':
+                        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        ext = "xlsx"
+                    else:
+                        mime = "text/csv"
+                        ext = "csv"
+                        st.warning("⚠️ openpyxl not installed. Downloading as CSV instead. Install openpyxl for Excel export.")
+                    st.download_button(
+                        label=f"📥 Download Assignments as {ext.upper()}",
+                        data=excel_data,
+                        file_name=f"assignments_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}",
+                        mime=mime,
+                        use_container_width=True
+                    )
+                
+                # Display table with actions
                 for idx, row in filtered.iterrows():
                     with st.container():
                         cols = st.columns([1.2, 1.2, 1.2, 1.5, 2, 1, 1, 1, 0.8, 0.8, 0.8])
@@ -1891,18 +1931,18 @@ elif st.session_state.user_role == "teacher":
                         cols[5].write(row['date'])
                         cols[6].write(str(row['points_earned']))
                         cols[7].write(row['grade'] if row.get('grade') else "N/A")
-                       
+                        
                         # View button
                         if cols[8].button("👁️", key=f"view_sub_{row['submission_id']}", help="View Details"):
                             st.session_state.view_submission = row.to_dict()
                             st.rerun()
-                       
+                        
                         # Edit button
                         if cols[9].button("✏️", key=f"edit_sub_{row['submission_id']}", help="Edit"):
                             st.session_state.edit_submission_id = row['submission_id']
                             st.session_state.edit_submission_data = row.to_dict()
                             st.rerun()
-                       
+                        
                         # Delete button
                         if cols[10].button("🗑️", key=f"del_sub_{row['submission_id']}", help="Delete Submission"):
                             if delete_submission(row['submission_id'], row['file_path']):
@@ -1910,9 +1950,9 @@ elif st.session_state.user_role == "teacher":
                                 st.rerun()
                             else:
                                 st.error("Failed to delete submission.")
-                       
+                        
                         st.markdown("---")
-               
+                
                 # View Submission Modal
                 if st.session_state.view_submission is not None:
                     st.subheader("📄 Submission Details")
@@ -1938,7 +1978,7 @@ elif st.session_state.user_role == "teacher":
                     if st.button("Close View"):
                         st.session_state.view_submission = None
                         st.rerun()
-               
+                
                 # Edit Submission Modal
                 if st.session_state.edit_submission_id is not None:
                     st.subheader("✏️ Edit Submission")
@@ -1948,7 +1988,7 @@ elif st.session_state.user_role == "teacher":
                         new_description = st.text_area("Description", value=ed['description'], height=150)
                         new_points = st.number_input("Points Earned", value=float(ed['points_earned']), step=1.0)
                         new_grade = st.text_input("Grade", value=ed.get('grade', 'A'))
-                       
+                        
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.form_submit_button("💾 Save Changes"):
@@ -1962,7 +2002,7 @@ elif st.session_state.user_role == "teacher":
                             if st.form_submit_button("❌ Cancel"):
                                 st.session_state.edit_submission_id = None
                                 st.rerun()
-               
+                
                 st.markdown("---")
                 st.caption("💡 Click 👁️ to view details, ✏️ to edit, 🗑️ to delete")
             else:
@@ -1979,7 +2019,7 @@ elif st.session_state.user_role == "teacher":
                     type_filter = st.selectbox("Filter by Activity Type", ["All"] + acts_df['activity_type'].unique().tolist(), key="act_type")
                 with col3:
                     student_filter_act = st.selectbox("Filter by Student", ["All"] + acts_df['student_name'].unique().tolist(), key="act_student")
-               
+                
                 filtered_act = acts_df.copy()
                 if class_filter_act != "All":
                     filtered_act = filtered_act[filtered_act['class'] == class_filter_act]
@@ -1987,9 +2027,30 @@ elif st.session_state.user_role == "teacher":
                     filtered_act = filtered_act[filtered_act['activity_type'] == type_filter]
                 if student_filter_act != "All":
                     filtered_act = filtered_act[filtered_act['student_name'] == student_filter_act]
-               
+                
                 st.write(f"**Total Extra Activities:** {len(filtered_act)}")
-               
+                
+                # Excel download button
+                if not filtered_act.empty:
+                    export_df_act = filtered_act[['student_name', 'reg_no', 'class', 'activity_type', 'topic', 'date', 'duration_minutes', 'points_earned', 'remarks']].copy()
+                    export_df_act.columns = ['Student Name', 'Reg No', 'Class', 'Activity Type', 'Topic', 'Date', 'Duration (min)', 'Points', 'Remarks']
+                    excel_data_act, file_type = export_to_excel(export_df_act, "Extra Activities")
+                    if file_type == 'excel':
+                        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        ext = "xlsx"
+                    else:
+                        mime = "text/csv"
+                        ext = "csv"
+                        st.warning("⚠️ openpyxl not installed. Downloading as CSV instead. Install openpyxl for Excel export.")
+                    st.download_button(
+                        label=f"📥 Download Extra Activities as {ext.upper()}",
+                        data=excel_data_act,
+                        file_name=f"extra_activities_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}",
+                        mime=mime,
+                        use_container_width=True
+                    )
+                
+                # Display table with actions
                 for idx, row in filtered_act.iterrows():
                     with st.container():
                         cols = st.columns([1.2, 1.2, 1.2, 1.5, 2, 1, 1, 0.8, 0.8, 0.8])
@@ -2000,18 +2061,18 @@ elif st.session_state.user_role == "teacher":
                         cols[4].write(row['topic'][:40] + "..." if len(row['topic']) > 40 else row['topic'])
                         cols[5].write(row['date'])
                         cols[6].write(str(row['points_earned']))
-                       
+                        
                         # View button
                         if cols[7].button("👁️", key=f"view_act_{row['activity_id']}", help="View Details"):
                             st.session_state.view_activity = row.to_dict()
                             st.rerun()
-                       
+                        
                         # Edit button
                         if cols[8].button("✏️", key=f"edit_act_{row['activity_id']}", help="Edit"):
                             st.session_state.edit_activity_id = row['activity_id']
                             st.session_state.edit_activity_data = row.to_dict()
                             st.rerun()
-                       
+                        
                         # Delete button
                         if cols[9].button("🗑️", key=f"del_act_{row['activity_id']}", help="Delete Activity"):
                             if delete_activity(row['activity_id'], row['file_path']):
@@ -2019,9 +2080,9 @@ elif st.session_state.user_role == "teacher":
                                 st.rerun()
                             else:
                                 st.error("Failed to delete activity.")
-                       
+                        
                         st.markdown("---")
-               
+                
                 # View Activity Modal
                 if st.session_state.view_activity is not None:
                     st.subheader("📄 Activity Details")
@@ -2042,7 +2103,7 @@ elif st.session_state.user_role == "teacher":
                     if st.button("Close View"):
                         st.session_state.view_activity = None
                         st.rerun()
-               
+                
                 # Edit Activity Modal
                 if st.session_state.edit_activity_id is not None:
                     st.subheader("✏️ Edit Activity")
@@ -2051,7 +2112,7 @@ elif st.session_state.user_role == "teacher":
                         new_topic = st.text_input("Topic", value=ed['topic'])
                         new_remarks = st.text_area("Remarks", value=ed.get('remarks', ''), height=100)
                         new_points = st.number_input("Points Earned", value=float(ed['points_earned']), step=1.0)
-                       
+                        
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.form_submit_button("💾 Save Changes"):
@@ -2065,7 +2126,7 @@ elif st.session_state.user_role == "teacher":
                             if st.form_submit_button("❌ Cancel"):
                                 st.session_state.edit_activity_id = None
                                 st.rerun()
-               
+                
                 st.markdown("---")
                 st.caption("💡 Click 👁️ to view details, ✏️ to edit, 🗑️ to delete")
             else:
@@ -2280,7 +2341,7 @@ st.markdown("""
     <p style='margin: 5px 0; font-weight: bold;'>Continuous Student Evaluation & Monitoring System</p>
     <p style='margin: 3px 0;'>Design and Maintained by: S P Sajjan, Assistant Professor, GFGCW, Jamkhandi</p>
     <p style='margin: 3px 0;'>📧 Contact: sajjanvsl@gmail.com | 📞 Help Desk: 9008802403</p>
-    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 👁️ View | ✏️ Edit | 🗑️ Delete (Bulk Student Deletion with Table Checkboxes)</p>
+    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 👁️ View | ✏️ Edit | 🗑️ Delete | 📥 Export to Excel/CSV</p>
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
