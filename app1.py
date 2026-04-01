@@ -1006,7 +1006,7 @@ Path("uploads").mkdir(exist_ok=True)
 st.title("📚 Continuous Student Evaluation & Monitoring System")
 st.markdown("---")
 
-# Sidebar
+# Sidebar (unchanged)
 with st.sidebar:
     if st.session_state.user_role:
         if st.session_state.user_role == "student":
@@ -1745,8 +1745,8 @@ elif st.session_state.user_role == "teacher":
 
     elif st.session_state.page == "👨‍🎓 Manage Students":
         st.header("Manage Students")
-        tab1, tab2 = st.tabs(["📝 Edit Student Details", "🗑️ Delete Student Accounts (Checkboxes)"])
-        
+        tab1, tab2 = st.tabs(["📝 Edit Student Details", "🗑️ Delete Student Accounts (Table with Checkboxes)"])
+
         with tab1:
             st.info("Faculty: You can edit all student details.")
             students_df = get_all_students()
@@ -1794,11 +1794,11 @@ elif st.session_state.user_role == "teacher":
                                 st.info("No submissions yet.")
             else:
                 st.info("No students found.")
-        
+
         with tab2:
             st.warning("⚠️ **Warning: Student Deletion** - This action is permanent and cannot be undone!")
             st.info("Deleting a student will remove:\n- All submissions and uploaded files\n- All activities\n- All points and rewards\n- All subject registrations\n- The student account itself")
-            
+
             students_df = get_all_students()
             if not students_df.empty:
                 # Show duplicate registrations warning
@@ -1809,24 +1809,36 @@ elif st.session_state.user_role == "teacher":
                     st.write("The following students have multiple registrations:")
                     for _, dup in duplicates.iterrows():
                         st.write(f"- **{dup['name']}** in **{dup['class']}** (Registered {dup['count']} times)")
-                
-                st.subheader("Select Students to Delete")
-                # Create checkboxes for each student
-                selected_students = []
-                for idx, row in students_df.iterrows():
-                    checkbox_label = f"{row['reg_no']} - {row['name']} ({row['class']}) - Points: {row['total_points']}"
-                    if st.checkbox(checkbox_label, key=f"del_{row['student_id']}"):
-                        selected_students.append(row)
-                
-                if selected_students:
+
+                # Prepare a DataFrame with a selection column
+                display_df = students_df[['reg_no', 'name', 'class', 'email', 'phone', 'total_points']].copy()
+                # Add a new column 'Select' with default False
+                display_df['Select'] = False
+
+                # Use st.data_editor to show a table with checkboxes
+                edited_df = st.data_editor(
+                    display_df,
+                    column_config={
+                        "Select": st.column_config.CheckboxColumn("Select", default=False)
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key="student_delete_table"
+                )
+
+                # Get selected rows
+                selected_indices = edited_df[edited_df['Select']].index.tolist()
+                selected_students = students_df.iloc[selected_indices] if selected_indices else pd.DataFrame()
+
+                if not selected_students.empty:
                     st.subheader("Students Selected for Deletion")
-                    for s in selected_students:
-                        st.write(f"- {s['name']} (Reg: {s['reg_no']}, Class: {s['class']})")
-                    
+                    for _, row in selected_students.iterrows():
+                        st.write(f"- {row['name']} (Reg: {row['reg_no']}, Class: {row['class']})")
+
                     if st.button("🗑️ **DELETE SELECTED STUDENTS**", type="primary"):
                         with st.spinner("Deleting students..."):
                             deleted_count = 0
-                            for student in selected_students:
+                            for _, student in selected_students.iterrows():
                                 if delete_student_complete(student['student_id'], student['reg_no']):
                                     deleted_count += 1
                             if deleted_count > 0:
@@ -1836,10 +1848,7 @@ elif st.session_state.user_role == "teacher":
                             else:
                                 st.error("Failed to delete students. Please try again.")
                 else:
-                    st.info("No students selected. Use the checkboxes above to select students for deletion.")
-                
-                st.markdown("---")
-                st.caption("💡 Tip: Check multiple students at once to delete them in bulk. All their data will be permanently removed.")
+                    st.info("No students selected. Use the checkboxes in the table to select students for deletion.")
             else:
                 st.info("No students found in the system.")
 
@@ -2271,7 +2280,7 @@ st.markdown("""
     <p style='margin: 5px 0; font-weight: bold;'>Continuous Student Evaluation & Monitoring System</p>
     <p style='margin: 3px 0;'>Design and Maintained by: S P Sajjan, Assistant Professor, GFGCW, Jamkhandi</p>
     <p style='margin: 3px 0;'>📧 Contact: sajjanvsl@gmail.com | 📞 Help Desk: 9008802403</p>
-    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 👁️ View | ✏️ Edit | 🗑️ Delete (Bulk Student Deletion with Checkboxes)</p>
+    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 👁️ View | ✏️ Edit | 🗑️ Delete (Bulk Student Deletion with Table Checkboxes)</p>
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
