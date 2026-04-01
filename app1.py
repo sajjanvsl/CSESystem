@@ -9,7 +9,6 @@ import base64
 import re
 import numpy as np
 from pathlib import Path
-from io import BytesIO
 
 # --- Supabase imports ---
 try:
@@ -239,13 +238,13 @@ def delete_student_complete(student_id, student_reg_no):
         for sub in submissions.data:
             if sub.get('file_path') and os.path.exists(sub['file_path']):
                 os.remove(sub['file_path'])
-        
+       
         # Get all activities with file paths
         activities = supabase.table('activities').select('file_path').eq('student_id', student_id).execute()
         for act in activities.data:
             if act.get('file_path') and os.path.exists(act['file_path']):
                 os.remove(act['file_path'])
-        
+       
         # Delete from all related tables
         supabase.table('submissions').delete().eq('student_id', student_id).execute()
         supabase.table('activities').delete().eq('student_id', student_id).execute()
@@ -253,16 +252,16 @@ def delete_student_complete(student_id, student_reg_no):
         supabase.table('rewards').delete().eq('student_id', student_id).execute()
         supabase.table('point_transactions').delete().eq('student_id', student_id).execute()
         supabase.table('student_subjects').delete().eq('student_id', student_id).execute()
-        
+       
         # Delete student folder from uploads
         student_folder = Path("uploads") / student_reg_no
         if student_folder.exists():
             import shutil
             shutil.rmtree(student_folder)
-        
+       
         # Finally delete student record
         supabase.table('students').delete().eq('student_id', student_id).execute()
-        
+       
         return True
     except Exception as e:
         st.error(f"Error deleting student: {e}")
@@ -1000,13 +999,6 @@ def get_file_view_link(file_path, file_name, file_type):
                 return f'<pre style="background:#f5f5f5; padding:10px;">{content}</pre>'
     return None
 
-def export_to_excel(df, sheet_name="Data"):
-    """Convert dataframe to Excel bytes for download."""
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-    return output.getvalue()
-
 # ---------- Create uploads directory ----------
 Path("uploads").mkdir(exist_ok=True)
 
@@ -1014,7 +1006,7 @@ Path("uploads").mkdir(exist_ok=True)
 st.title("📚 Continuous Student Evaluation & Monitoring System")
 st.markdown("---")
 
-# Sidebar (complete)
+# Sidebar (unchanged)
 with st.sidebar:
     if st.session_state.user_role:
         if st.session_state.user_role == "student":
@@ -1232,9 +1224,425 @@ if st.session_state.page == "Welcome":
                         st.error("Please fill all fields.")
 
 # ========== STUDENT SECTION ==========
-# (Include the full student section from the previous working version)
-# For brevity, I've omitted the student section here, but it must be included in the final code.
-# The student section is identical to the one that worked earlier.
+elif st.session_state.user_role == "student":
+    student = st.session_state.current_student
+    if not student:
+        st.error("Please login first!")
+        st.stop()
+
+    student_id = student['student_id']
+    student_reg = student['reg_no']
+    student_name = student['name']
+    student_class = student['class']
+    student_email = student['email']
+    student_phone = student['phone']
+    total_points = student['total_points']
+    current_streak = student['current_streak']
+    best_streak = student['best_streak']
+
+    if st.session_state.page == "edit_registration":
+        st.header("✏️ Edit Your Registration Details")
+        st.info("Update your personal information. Registration number cannot be changed.")
+        st.info("Class examples: BCA VI, BA II, BCom I")
+        with st.form("edit_registration_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.text_input("Registration Number", value=student_reg, disabled=True)
+                name = st.text_input("Full Name*", value=student_name)
+                class_name = st.text_input("Class*", value=student_class, placeholder="e.g., BCA VI")
+            with col2:
+                st.info("Your registration number is permanent.")
+                email = st.text_input("Email*", value=student_email)
+                phone = st.text_input("Phone", value=student_phone)
+            if st.form_submit_button("💾 Save Changes", type="primary"):
+                if name and class_name and email:
+                    if edit_student_registration(student_id, name, class_name, email, phone):
+                        st.session_state.page = "🏠 Dashboard"
+                        st.rerun()
+                else:
+                    st.error("Please fill all required fields (*)")
+            if st.form_submit_button("↩️ Cancel"):
+                st.session_state.page = "🏠 Dashboard"
+                st.rerun()
+        st.info("📚 Changing class may affect available subjects.")
+
+    elif st.session_state.page == "🏠 Dashboard":
+        st.header(f"Welcome back, {student_name}! 👋")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Points", total_points, "🏆")
+        with col2:
+            st.metric("Current Streak", f"{current_streak} days", "🔥")
+        with col3:
+            st.metric("Best Streak", f"{best_streak} days", "⭐")
+        with col4:
+            subs = supabase.table('submissions').select('submission_id').eq('student_id', student_id).execute()
+            st.metric("Total Submissions", len(subs.data), "📝")
+        st.markdown("---")
+        st.subheader("📚 Your Registered Subjects")
+        subjects_df = get_student_subjects(student_id)
+        if not subjects_df.empty:
+            st.dataframe(subjects_df[['subject_code','subject_name','teacher_name']], use_container_width=True)
+        else:
+            st.info("No subjects registered yet. Go to 'My Subjects' to register.")
+        progress = get_student_progress(student_id)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📊 Submission Progress")
+            st.metric("Total Submissions", progress['total_submissions'])
+            st.metric("Submission Points", progress['submission_points'])
+        with col2:
+            st.subheader("🎯 Activity Progress")
+            st.metric("Total Activities", progress['total_activities'])
+            st.metric("Activity Points", progress['activity_points'])
+        st.subheader("📅 Recent Activity (Last 7 Days)")
+        daily_activity = get_daily_activity(student_id, 7)
+        if not daily_activity.empty:
+            st.dataframe(daily_activity, use_container_width=True)
+        else:
+            st.info("No recent activity found.")
+
+    elif st.session_state.page == "📚 My Subjects":
+        st.header("📚 Subject Registration")
+        tab1, tab2 = st.tabs(["➕ Register New Subjects", "📋 My Registered Subjects"])
+        with tab1:
+            st.subheader(f"Available Subjects for {student_class}")
+            available = get_all_subjects(student_class)
+            if not available.empty:
+                registered_df = get_student_subjects(student_id)
+                registered_ids = registered_df['subject_id'].tolist() if not registered_df.empty else []
+                available = available[~available['subject_id'].isin(registered_ids)]
+                if not available.empty:
+                    st.write("Select subjects to register:")
+                    to_register = []
+                    for _, row in available.iterrows():
+                        teacher = row['teacher_name'] if row['teacher_name'] else "Not Assigned"
+                        if st.checkbox(f"📘 {row['subject_code']} - {row['subject_name']} (Teacher: {teacher})", key=f"reg_{row['subject_id']}"):
+                            to_register.append(row['subject_id'])
+                    if to_register:
+                        if st.button("✅ Register Selected Subjects", type="primary"):
+                            if register_student_subjects(student_id, to_register):
+                                st.success(f"Registered {len(to_register)} subjects!")
+                                st.rerun()
+                else:
+                    st.info("You have already registered for all available subjects.")
+            else:
+                st.info("No subjects available for your class yet.")
+        with tab2:
+            st.subheader("Your Registered Subjects")
+            subjects_df = get_student_subjects(student_id)
+            if not subjects_df.empty:
+                st.dataframe(subjects_df[['subject_code','subject_name','teacher_name','registration_date']], use_container_width=True)
+                st.markdown("---")
+                st.subheader("Remove Subjects")
+                subject_options = {f"{row['subject_code']} - {row['subject_name']}": row['subject_id'] for _, row in subjects_df.iterrows()}
+                selected = st.selectbox("Select subject to remove:", list(subject_options.keys()))
+                if selected:
+                    if st.button("🗑️ Remove Subject", type="secondary"):
+                        if remove_student_subject(student_id, subject_options[selected]):
+                            st.success(f"Removed {selected} successfully!")
+                            st.rerun()
+            else:
+                st.info("You haven't registered for any subjects yet.")
+
+    elif st.session_state.page == "➕ New Submission":
+        st.header("New Submission - AI Powered!")
+        if not SKLEARN_AVAILABLE:
+            st.warning("⚠️ Advanced AI features limited. Install scikit-learn.")
+        st.info("✅ Your submission will be analyzed by AI. Duplicate submissions blocked.")
+        subjects_df = get_student_subjects(student_id)
+        if subjects_df.empty:
+            st.warning("⚠️ Please register for subjects first!")
+        else:
+            with st.form("submission_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    selected_subject = st.selectbox("Subject*", subjects_df['subject_name'].tolist())
+                    submission_type = st.selectbox("Submission Type*", [
+                        "Daily Homework", "Weekly Assignment", "Monthly Assignment",
+                        "Seminar", "Project", "Research Paper", "Lab Report"
+                    ])
+                    title = st.text_input("Title*")
+                    date = st.date_input("Date*", datetime.now().date())
+                with col2:
+                    base_points = get_auto_grade_points(submission_type)
+                    st.info(f"📊 Base points: **{base_points}**")
+                    st.info("🤖 AI will adjust points")
+                    st.info("🔄 Duplicate detection enabled")
+                description = st.text_area("Description*", height=200, placeholder="Write your submission...")
+                st.markdown("**Upload File (optional)** – Max 500 KB")
+                uploaded_file = st.file_uploader("", type=['pdf','docx','txt','jpg','png','zip','py','java','cpp'], label_visibility="collapsed")
+                if st.form_submit_button("Submit", type="primary"):
+                    if title and description:
+                        file_path = file_name = file_type = file_size = None
+                        if uploaded_file:
+                            if uploaded_file.size > 512000:
+                                st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
+                                st.stop()
+                            upload_dir = Path("uploads") / student_reg / "submissions"
+                            upload_dir.mkdir(parents=True, exist_ok=True)
+                            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                            file_name = f"{timestamp}_{uploaded_file.name}"
+                            file_path = str(upload_dir / file_name)
+                            file_type = uploaded_file.type
+                            file_size = uploaded_file.size
+                            with open(file_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+                        submission_id = add_submission_with_ai(
+                            student_id, submission_type, selected_subject, title, description,
+                            date.strftime('%Y-%m-%d'), file_path, file_name, file_type, file_size
+                        )
+                        if submission_id:
+                            st.success("✅ Submission recorded! AI analysis complete.")
+                            st.balloons()
+                            st.rerun()
+                    else:
+                        st.error("Please fill all required fields.")
+
+    elif st.session_state.page == "➕ Extra Activity":
+        st.header("Add Extra Activity")
+        st.success("🎯 Extra Activities earn 25 points each!")
+        with st.form("extra_activity_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                activity_type = st.selectbox("Activity Type", ["Workshop","Sports","Cultural","Competition","Volunteer","Club Meeting","Guest Lecture","Other"])
+                topic = st.text_input("Topic*")
+                date = st.date_input("Activity Date*", datetime.now().date())
+            with col2:
+                duration = st.number_input("Duration (minutes)", min_value=1, value=60)
+                remarks = st.text_area("Remarks")
+                st.markdown("**Upload Supporting Document** – Max 500 KB")
+                uploaded_file = st.file_uploader("", type=['pdf','docx','txt','jpg','png','zip'], label_visibility="collapsed")
+            if st.form_submit_button("Add Activity"):
+                if topic:
+                    file_path = file_name = None
+                    if uploaded_file:
+                        if uploaded_file.size > 512000:
+                            st.error("❌ File size exceeds 500 KB. Please upload a smaller file.")
+                            st.stop()
+                        upload_dir = Path("uploads") / student_reg / "activities"
+                        upload_dir.mkdir(parents=True, exist_ok=True)
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        file_name = f"{timestamp}_{uploaded_file.name}"
+                        file_path = str(upload_dir / file_name)
+                        with open(file_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                    if add_extra_activity(student_id, activity_type, topic, date.strftime('%Y-%m-%d'), duration, remarks, file_path, file_name):
+                        st.success("✅ Activity added! You earned 25 points!")
+                        st.balloons()
+                        st.rerun()
+                else:
+                    st.error("Please enter topic.")
+
+    elif st.session_state.page == "📋 My Submissions":
+        st.header("My Submissions")
+        df = get_student_submissions(student_id)
+        if not df.empty:
+            total_subs = len(df)
+            total_pts = df['points_earned'].sum()
+            avg_pts = df['points_earned'].mean()
+            avg_conf = df['ai_confidence'].mean()
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Submissions", total_subs)
+            with col2:
+                st.metric("Total Points", total_pts)
+            with col3:
+                st.metric("Avg Points", f"{avg_pts:.1f}")
+            with col4:
+                st.metric("Avg AI Confidence", f"{avg_conf*100:.0f}%")
+            for _, row in df.iterrows():
+                with st.expander(f"📄 {row['title']} - {row['date']} (Grade: {row['grade']}, Points: {row['points_earned']})"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Subject:** {row['subject']}")
+                        st.write(f"**Type:** {row['submission_type']}")
+                        st.write(f"**Description:** {row['description']}")
+                    with col2:
+                        st.write(f"**Status:** {row['status']}")
+                        st.write(f"**Submitted:** {row['date']}")
+                        if row['teacher_feedback']:
+                            st.write(f"**Feedback:** {row['teacher_feedback']}")
+                    if row['ai_confidence'] > 0:
+                        st.markdown("---")
+                        st.write("**🤖 AI Analysis:**")
+                        cola, colb, colc = st.columns(3)
+                        cola.metric("AI Confidence", f"{row['ai_confidence']*100:.0f}%")
+                        colb.metric("Originality", f"{(1-row['plagiarism_score'])*100:.0f}%")
+                        if row['ai_feedback']:
+                            st.info(f"📝 {row['ai_feedback']}")
+                    if row['file_path'] and os.path.exists(row['file_path']):
+                        st.markdown("---")
+                        st.write("**📎 Attached File:**")
+                        dl = get_file_download_link(row['file_path'], row['file_name'] or "file")
+                        if dl:
+                            st.markdown(dl, unsafe_allow_html=True)
+                        if st.button(f"👁️ Preview", key=f"preview_{row['submission_id']}"):
+                            st.session_state.view_file = {'path': row['file_path'], 'name': row['file_name'], 'type': row['file_type']}
+                    if st.session_state.get('view_file') and st.session_state.view_file['path'] == row['file_path']:
+                        preview = get_file_view_link(st.session_state.view_file['path'], st.session_state.view_file['name'], st.session_state.view_file['type'])
+                        if preview:
+                            st.markdown("---")
+                            st.write("**📄 Preview:**")
+                            st.markdown(preview, unsafe_allow_html=True)
+                   
+                    # Delete button for student
+                    st.markdown("---")
+                    if st.button(f"🗑️ Delete Submission", key=f"del_sub_{row['submission_id']}"):
+                        if delete_submission(row['submission_id'], row['file_path']):
+                            st.success("Submission deleted successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete submission.")
+        else:
+            st.info("No submissions found.")
+
+    elif st.session_state.page == "📂 My Uploads":
+        st.header("📂 My Uploaded Files")
+        tab1, tab2 = st.tabs(["📤 Submissions", "🎯 Activities"])
+        with tab1:
+            st.subheader("Submission Files")
+            subs = get_student_submissions(student_id)
+            found = False
+            for _, row in subs.iterrows():
+                if row['file_path'] and os.path.exists(row['file_path']):
+                    found = True
+                    with st.container():
+                        col1, col2, col3, col4 = st.columns([3,1,1,1])
+                        col1.write(f"**{row['title']}** ({row['subject']})\n📅 {row['date']} | 📄 {row['file_name']}")
+                        dl = get_file_download_link(row['file_path'], row['file_name'])
+                        if dl:
+                            col2.markdown(dl, unsafe_allow_html=True)
+                        if col3.button("👁️ View", key=f"view_sub_{row['submission_id']}"):
+                            preview = get_file_view_link(row['file_path'], row['file_name'], row['file_type'])
+                            if preview:
+                                st.session_state.view_content = preview
+                        if col4.button("🗑️ Delete", key=f"del_sub_file_{row['submission_id']}"):
+                            if delete_submission(row['submission_id'], row['file_path']):
+                                st.success("File deleted!")
+                                st.rerun()
+            if not found:
+                st.info("No files uploaded yet.")
+        with tab2:
+            st.subheader("Activity Files")
+            acts = get_student_activities(student_id)
+            found = False
+            for _, row in acts.iterrows():
+                if row['file_path'] and os.path.exists(row['file_path']):
+                    found = True
+                    with st.container():
+                        col1, col2, col3, col4 = st.columns([3,1,1,1])
+                        col1.write(f"**{row['topic']}** ({row['activity_type']})\n📅 {row['date']} | 📄 {row['file_name']}")
+                        dl = get_file_download_link(row['file_path'], row['file_name'])
+                        if dl:
+                            col2.markdown(dl, unsafe_allow_html=True)
+                        if col3.button("👁️ View", key=f"view_act_{row['activity_id']}"):
+                            preview = get_file_view_link(row['file_path'], row['file_name'], None)
+                            if preview:
+                                st.session_state.view_content = preview
+                        if col4.button("🗑️ Delete", key=f"del_act_file_{row['activity_id']}"):
+                            if delete_activity(row['activity_id'], row['file_path']):
+                                st.success("Activity deleted!")
+                                st.rerun()
+            if not found:
+                st.info("No activity files uploaded yet.")
+        if 'view_content' in st.session_state:
+            st.markdown("---")
+            st.subheader("Preview")
+            st.markdown(st.session_state.view_content, unsafe_allow_html=True)
+            if st.button("Close Preview"):
+                del st.session_state.view_content
+
+    elif st.session_state.page == "📈 Daily Activity":
+        st.header("Daily Activity Tracker")
+        col1, col2 = st.columns(2)
+        start = st.date_input("Start Date", datetime.now().date() - timedelta(days=30))
+        end = st.date_input("End Date", datetime.now().date())
+        daily_all = get_daily_activity(student_id, 365)
+        if not daily_all.empty:
+            daily_all['activity_date'] = pd.to_datetime(daily_all['activity_date'])
+            mask = (daily_all['activity_date'] >= pd.to_datetime(start)) & (daily_all['activity_date'] <= pd.to_datetime(end))
+            df = daily_all[mask].sort_values('activity_date', ascending=False)
+            if not df.empty:
+                total_days = len(df)
+                active_days = len(df[df['total_points_earned']>0])
+                total_pts = df['total_points_earned'].sum()
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Total Days", total_days)
+                col2.metric("Active Days", active_days)
+                col3.metric("Total Points", total_pts)
+                st.dataframe(df[['activity_date','submission_count','activity_count','total_points_earned']], use_container_width=True)
+            else:
+                st.info("No activity recorded.")
+        else:
+            st.info("No activity recorded.")
+
+    elif st.session_state.page == "🏆 Leaderboard":
+        st.header("🏆 Student Leaderboard")
+        col1, col2 = st.columns(2)
+        with col1:
+            classes = supabase.table('students').select('class').execute()
+            class_list = ["All Classes"] + sorted(list(set(c['class'] for c in classes.data)))
+            class_filter = st.selectbox("Filter by Class", class_list)
+        with col2:
+            limit = st.slider("Top N Students", 5, 50, 20)
+        leaderboard = get_leaderboard(limit, class_filter if class_filter != "All Classes" else None)
+        if not leaderboard.empty:
+            st.dataframe(leaderboard[['Rank','name','class','total_points','current_streak','best_streak','submissions_total','activities_count']], use_container_width=True)
+            current_rank = leaderboard[leaderboard['reg_no'] == student_reg]['Rank'].values
+            if len(current_rank) > 0:
+                st.info(f"🏅 Your current rank: #{current_rank[0]} with {total_points} points")
+        else:
+            st.info("No students found.")
+
+    elif st.session_state.page == "🎁 Rewards":
+        st.header("🎁 Reward Store")
+        st.info(f"💰 You have {total_points} points available")
+        rewards = [
+            {"name": "📚 Book Voucher", "cost": 50, "desc": "Get a voucher for academic books"},
+            {"name": "🎮 Game Time", "cost": 30, "desc": "Extra 2 hours gaming"},
+            {"name": "🍕 Pizza Party", "cost": 100, "desc": "Pizza party for your class"},
+            {"name": "🏆 Trophy", "cost": 200, "desc": "Custom achievement trophy"},
+            {"name": "📱 Tech Gadget", "cost": 500, "desc": "Latest tech gadget"},
+            {"name": "🎉 Celebration", "cost": 80, "desc": "Class celebration party"},
+            {"name": "⭐ Star Badge", "cost": 20, "desc": "Special recognition badge"},
+            {"name": "📝 Extra Credit", "cost": 40, "desc": "5% extra credit on next assignment"},
+        ]
+        cols = st.columns(2)
+        for i, reward in enumerate(rewards):
+            with cols[i%2]:
+                st.markdown(f"### {reward['name']}")
+                st.write(f"**Cost:** {reward['cost']} points")
+                st.write(reward['desc'])
+                if total_points >= reward['cost']:
+                    if st.button(f"Claim {reward['name']}", key=f"claim_{i}"):
+                        if add_reward_claim(student_id, reward['name'], reward['cost']):
+                            st.success(f"You claimed {reward['name']}!")
+                            st.rerun()
+                else:
+                    st.warning(f"Need {reward['cost']-total_points} more points")
+
+    elif st.session_state.page == "👤 Edit Profile":
+        st.header("Edit Profile")
+        with st.form("edit_profile_form"):
+            name = st.text_input("Full Name", value=student_name)
+            email = st.text_input("Email", value=student_email)
+            phone = st.text_input("Phone", value=student_phone)
+            st.subheader("Change Password (Optional)")
+            new_pass = st.text_input("New Password", type="password")
+            confirm = st.text_input("Confirm New Password", type="password")
+            if st.form_submit_button("Update Profile"):
+                if new_pass:
+                    if new_pass == confirm:
+                        supabase.table('students').update({'password': hash_password(new_pass)}).eq('student_id', student_id).execute()
+                        st.success("Password updated.")
+                    else:
+                        st.error("Passwords do not match!")
+                supabase.table('students').update({'name': name, 'email': email, 'phone': phone}).eq('student_id', student_id).execute()
+                st.success("Profile updated successfully!")
+                student = supabase.table('students').select('*').eq('student_id', student_id).execute().data[0]
+                st.session_state.current_student = student
+                st.rerun()
 
 # ========== TEACHER SECTION ==========
 elif st.session_state.user_role == "teacher":
@@ -1277,7 +1685,6 @@ elif st.session_state.user_role == "teacher":
             st.dataframe(dist, use_container_width=True)
 
     elif st.session_state.page == "📚 Subject Management":
-        # (Keep the existing subject management code)
         st.header("📚 Subject Management")
         st.info("Class name format: e.g., BCA VI, BA II")
         tab1, tab2, tab3 = st.tabs(["➕ Create Subject", "📋 My Subjects", "👥 Assign Teachers"])
@@ -1405,6 +1812,7 @@ elif st.session_state.user_role == "teacher":
 
                 # Prepare a DataFrame with a selection column
                 display_df = students_df[['reg_no', 'name', 'class', 'email', 'phone', 'total_points']].copy()
+                # Add a new column 'Select' with default False
                 display_df['Select'] = False
 
                 # Use st.data_editor to show a table with checkboxes
@@ -1460,7 +1868,7 @@ elif st.session_state.user_role == "teacher":
                     subject_filter = st.selectbox("Filter by Subject", ["All"] + subs_df['subject'].unique().tolist(), key="assign_subj")
                 with col3:
                     student_filter = st.selectbox("Filter by Student", ["All"] + subs_df['student_name'].unique().tolist(), key="assign_student")
-                
+               
                 filtered = subs_df.copy()
                 if class_filter != "All":
                     filtered = filtered[filtered['class'] == class_filter]
@@ -1468,26 +1876,10 @@ elif st.session_state.user_role == "teacher":
                     filtered = filtered[filtered['subject'] == subject_filter]
                 if student_filter != "All":
                     filtered = filtered[filtered['student_name'] == student_filter]
-                
+               
                 st.write(f"**Total Assignments:** {len(filtered)}")
-                
-                # Excel download button
-                if not filtered.empty:
-                    export_df = filtered[['student_name', 'reg_no', 'class', 'subject', 'title', 'submission_type', 'date', 'points_earned', 'grade', 'ai_confidence', 'plagiarism_score']].copy()
-                    export_df.columns = ['Student Name', 'Reg No', 'Class', 'Subject', 'Title', 'Type', 'Date', 'Points', 'Grade', 'AI Confidence', 'Plagiarism Score']
-                    export_df['AI Confidence'] = (export_df['AI Confidence'] * 100).round(0).astype(str) + '%'
-                    export_df['Plagiarism Score'] = (export_df['Plagiarism Score'] * 100).round(0).astype(str) + '%'
-                    
-                    excel_data = export_to_excel(export_df, "Assignments")
-                    st.download_button(
-                        label="📥 Download Assignments as Excel",
-                        data=excel_data,
-                        file_name=f"assignments_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                
-                # Display table with actions
+               
+                # Create a clean table with all actions in the same row
                 for idx, row in filtered.iterrows():
                     with st.container():
                         cols = st.columns([1.2, 1.2, 1.2, 1.5, 2, 1, 1, 1, 0.8, 0.8, 0.8])
@@ -1499,18 +1891,18 @@ elif st.session_state.user_role == "teacher":
                         cols[5].write(row['date'])
                         cols[6].write(str(row['points_earned']))
                         cols[7].write(row['grade'] if row.get('grade') else "N/A")
-                        
+                       
                         # View button
                         if cols[8].button("👁️", key=f"view_sub_{row['submission_id']}", help="View Details"):
                             st.session_state.view_submission = row.to_dict()
                             st.rerun()
-                        
+                       
                         # Edit button
                         if cols[9].button("✏️", key=f"edit_sub_{row['submission_id']}", help="Edit"):
                             st.session_state.edit_submission_id = row['submission_id']
                             st.session_state.edit_submission_data = row.to_dict()
                             st.rerun()
-                        
+                       
                         # Delete button
                         if cols[10].button("🗑️", key=f"del_sub_{row['submission_id']}", help="Delete Submission"):
                             if delete_submission(row['submission_id'], row['file_path']):
@@ -1518,9 +1910,9 @@ elif st.session_state.user_role == "teacher":
                                 st.rerun()
                             else:
                                 st.error("Failed to delete submission.")
-                        
+                       
                         st.markdown("---")
-                
+               
                 # View Submission Modal
                 if st.session_state.view_submission is not None:
                     st.subheader("📄 Submission Details")
@@ -1546,7 +1938,7 @@ elif st.session_state.user_role == "teacher":
                     if st.button("Close View"):
                         st.session_state.view_submission = None
                         st.rerun()
-                
+               
                 # Edit Submission Modal
                 if st.session_state.edit_submission_id is not None:
                     st.subheader("✏️ Edit Submission")
@@ -1556,7 +1948,7 @@ elif st.session_state.user_role == "teacher":
                         new_description = st.text_area("Description", value=ed['description'], height=150)
                         new_points = st.number_input("Points Earned", value=float(ed['points_earned']), step=1.0)
                         new_grade = st.text_input("Grade", value=ed.get('grade', 'A'))
-                        
+                       
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.form_submit_button("💾 Save Changes"):
@@ -1570,7 +1962,7 @@ elif st.session_state.user_role == "teacher":
                             if st.form_submit_button("❌ Cancel"):
                                 st.session_state.edit_submission_id = None
                                 st.rerun()
-                
+               
                 st.markdown("---")
                 st.caption("💡 Click 👁️ to view details, ✏️ to edit, 🗑️ to delete")
             else:
@@ -1587,7 +1979,7 @@ elif st.session_state.user_role == "teacher":
                     type_filter = st.selectbox("Filter by Activity Type", ["All"] + acts_df['activity_type'].unique().tolist(), key="act_type")
                 with col3:
                     student_filter_act = st.selectbox("Filter by Student", ["All"] + acts_df['student_name'].unique().tolist(), key="act_student")
-                
+               
                 filtered_act = acts_df.copy()
                 if class_filter_act != "All":
                     filtered_act = filtered_act[filtered_act['class'] == class_filter_act]
@@ -1595,23 +1987,9 @@ elif st.session_state.user_role == "teacher":
                     filtered_act = filtered_act[filtered_act['activity_type'] == type_filter]
                 if student_filter_act != "All":
                     filtered_act = filtered_act[filtered_act['student_name'] == student_filter_act]
-                
+               
                 st.write(f"**Total Extra Activities:** {len(filtered_act)}")
-                
-                # Excel download button
-                if not filtered_act.empty:
-                    export_df_act = filtered_act[['student_name', 'reg_no', 'class', 'activity_type', 'topic', 'date', 'duration_minutes', 'points_earned', 'remarks']].copy()
-                    export_df_act.columns = ['Student Name', 'Reg No', 'Class', 'Activity Type', 'Topic', 'Date', 'Duration (min)', 'Points', 'Remarks']
-                    excel_data_act = export_to_excel(export_df_act, "Extra Activities")
-                    st.download_button(
-                        label="📥 Download Extra Activities as Excel",
-                        data=excel_data_act,
-                        file_name=f"extra_activities_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                
-                # Display table with actions
+               
                 for idx, row in filtered_act.iterrows():
                     with st.container():
                         cols = st.columns([1.2, 1.2, 1.2, 1.5, 2, 1, 1, 0.8, 0.8, 0.8])
@@ -1622,18 +2000,18 @@ elif st.session_state.user_role == "teacher":
                         cols[4].write(row['topic'][:40] + "..." if len(row['topic']) > 40 else row['topic'])
                         cols[5].write(row['date'])
                         cols[6].write(str(row['points_earned']))
-                        
+                       
                         # View button
                         if cols[7].button("👁️", key=f"view_act_{row['activity_id']}", help="View Details"):
                             st.session_state.view_activity = row.to_dict()
                             st.rerun()
-                        
+                       
                         # Edit button
                         if cols[8].button("✏️", key=f"edit_act_{row['activity_id']}", help="Edit"):
                             st.session_state.edit_activity_id = row['activity_id']
                             st.session_state.edit_activity_data = row.to_dict()
                             st.rerun()
-                        
+                       
                         # Delete button
                         if cols[9].button("🗑️", key=f"del_act_{row['activity_id']}", help="Delete Activity"):
                             if delete_activity(row['activity_id'], row['file_path']):
@@ -1641,9 +2019,9 @@ elif st.session_state.user_role == "teacher":
                                 st.rerun()
                             else:
                                 st.error("Failed to delete activity.")
-                        
+                       
                         st.markdown("---")
-                
+               
                 # View Activity Modal
                 if st.session_state.view_activity is not None:
                     st.subheader("📄 Activity Details")
@@ -1664,7 +2042,7 @@ elif st.session_state.user_role == "teacher":
                     if st.button("Close View"):
                         st.session_state.view_activity = None
                         st.rerun()
-                
+               
                 # Edit Activity Modal
                 if st.session_state.edit_activity_id is not None:
                     st.subheader("✏️ Edit Activity")
@@ -1673,7 +2051,7 @@ elif st.session_state.user_role == "teacher":
                         new_topic = st.text_input("Topic", value=ed['topic'])
                         new_remarks = st.text_area("Remarks", value=ed.get('remarks', ''), height=100)
                         new_points = st.number_input("Points Earned", value=float(ed['points_earned']), step=1.0)
-                        
+                       
                         col1, col2 = st.columns(2)
                         with col1:
                             if st.form_submit_button("💾 Save Changes"):
@@ -1687,14 +2065,13 @@ elif st.session_state.user_role == "teacher":
                             if st.form_submit_button("❌ Cancel"):
                                 st.session_state.edit_activity_id = None
                                 st.rerun()
-                
+               
                 st.markdown("---")
                 st.caption("💡 Click 👁️ to view details, ✏️ to edit, 🗑️ to delete")
             else:
                 st.info("No extra activities submitted yet.")
 
     elif st.session_state.page == "🤖 AI Reference Answers":
-        # (Keep existing code)
         st.header("🤖 AI Reference Answers Management")
         if not SKLEARN_AVAILABLE:
             st.warning("⚠️ scikit-learn not installed.")
@@ -1730,7 +2107,6 @@ elif st.session_state.user_role == "teacher":
                 st.error(f"Error loading: {e}")
 
     elif st.session_state.page == "📊 Class Analytics":
-        # (Keep existing code)
         st.header("Class Analytics")
         class_perf = supabase.table('students').select('class, total_points').execute()
         if class_perf.data:
@@ -1904,7 +2280,7 @@ st.markdown("""
     <p style='margin: 5px 0; font-weight: bold;'>Continuous Student Evaluation & Monitoring System</p>
     <p style='margin: 3px 0;'>Design and Maintained by: S P Sajjan, Assistant Professor, GFGCW, Jamkhandi</p>
     <p style='margin: 3px 0;'>📧 Contact: sajjanvsl@gmail.com | 📞 Help Desk: 9008802403</p>
-    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 👁️ View | ✏️ Edit | 🗑️ Delete | 📥 Export to Excel</p>
+    <p style='margin: 5px 0;'>✅ AI-Powered Validation | 📚 Faculty Edit | 🔐 Forgot Password | 📂 File Upload/Download/View | 🚫 Duplicate Prevention | 👁️ View | ✏️ Edit | 🗑️ Delete (Bulk Student Deletion with Table Checkboxes)</p>
     <p style='margin: 3px 0; color: #666; font-size: 0.9em;'>📅 Data retention: 6 months (automatic cleanup)</p>
 </div>
 """, unsafe_allow_html=True)
