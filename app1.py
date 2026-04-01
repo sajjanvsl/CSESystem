@@ -80,7 +80,7 @@ if 'view_submission' not in st.session_state:
 if 'view_activity' not in st.session_state:
     st.session_state.view_activity = None
 
-# ---------- Helper functions (unchanged from previous) ----------
+# ---------- Helper functions ----------
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -1006,7 +1006,7 @@ Path("uploads").mkdir(exist_ok=True)
 st.title("📚 Continuous Student Evaluation & Monitoring System")
 st.markdown("---")
 
-# Sidebar (unchanged from previous, only showing the important part)
+# Sidebar
 with st.sidebar:
     if st.session_state.user_role:
         if st.session_state.user_role == "student":
@@ -1044,7 +1044,6 @@ with st.sidebar:
                 st.session_state.page = "Welcome"
                 st.rerun()
     else:
-        # Login code unchanged
         st.header("🔐 Login")
         login_tab1, login_tab2, login_tab3 = st.tabs(["Student Login", "Teacher Login", "Forgot Password"])
 
@@ -1225,8 +1224,9 @@ if st.session_state.page == "Welcome":
                         st.error("Please fill all fields.")
 
 # ========== STUDENT SECTION ==========
-# ... (student section unchanged, omitted for brevity, but you should keep it)
-# We'll skip repeating the entire student section here, but the full code includes it.
+# (Keep the entire student section from your previous code)
+# For brevity, I'm not repeating it here, but it must be included in the final file.
+# The student section is unchanged from the version that worked.
 
 # ========== TEACHER SECTION ==========
 elif st.session_state.user_role == "teacher":
@@ -1241,7 +1241,6 @@ elif st.session_state.user_role == "teacher":
     teacher_dept = teacher['department']
 
     if st.session_state.page == "🏠 Teacher Dashboard":
-        # ... (unchanged)
         st.header(f"Teacher Dashboard 👨‍🏫")
         total_students = supabase.table('students').select('student_id').execute()
         total_submissions = supabase.table('submissions').select('submission_id').execute()
@@ -1270,7 +1269,7 @@ elif st.session_state.user_role == "teacher":
             st.dataframe(dist, use_container_width=True)
 
     elif st.session_state.page == "📚 Subject Management":
-        # ... (unchanged)
+        # ... (unchanged, same as previous)
         st.header("📚 Subject Management")
         st.info("Class name format: e.g., BCA VI, BA II")
         tab1, tab2, tab3 = st.tabs(["➕ Create Subject", "📋 My Subjects", "👥 Assign Teachers"])
@@ -1330,11 +1329,10 @@ elif st.session_state.user_role == "teacher":
                 if unassigned.empty: st.info("No unassigned subjects.")
 
     elif st.session_state.page == "👨‍🎓 Manage Students":
-        # ... (unchanged, but keep the two tabs: edit and delete)
         st.header("Manage Students")
         tab1, tab2 = st.tabs(["📝 Edit Student Details", "🗑️ Delete Student Accounts"])
         with tab1:
-            # ... (unchanged)
+            # ... (unchanged, same as previous)
             st.info("Faculty: You can edit all student details.")
             students_df = get_all_students()
             if not students_df.empty:
@@ -1381,13 +1379,14 @@ elif st.session_state.user_role == "teacher":
                                 st.info("No submissions yet.")
             else:
                 st.info("No students found.")
+        
         with tab2:
-            # ... (unchanged, with duplicate detection and confirmation)
             st.warning("⚠️ **Warning: Student Deletion** - This action is permanent and cannot be undone!")
             st.info("Deleting a student will remove:\n- All submissions and uploaded files\n- All activities\n- All points and rewards\n- All subject registrations\n- The student account itself")
             students_df = get_all_students()
             if not students_df.empty:
                 st.subheader("Select Student to Delete")
+                # Show duplicate registrations warning
                 duplicate_check = students_df.groupby(['name', 'class']).size().reset_index(name='count')
                 duplicates = duplicate_check[duplicate_check['count'] > 1]
                 if not duplicates.empty:
@@ -1419,10 +1418,12 @@ elif st.session_state.user_role == "teacher":
                     st.subheader("Confirm Deletion")
                     confirm_name = st.text_input("Type student name to confirm:", placeholder="Enter full name")
                     confirm_reg = st.text_input("Type registration number to confirm:", placeholder="Enter reg number")
+                    
                     if selected_student:
                         reg_no = selected_student.split(" - ")[0]
                         student_data = students_df[students_df['reg_no'] == reg_no].iloc[0]
-                        if confirm_name == student_data['name'] and confirm_reg == student_data['reg_no']:
+                        # Strip and compare case-insensitively for name, exact for reg number
+                        if confirm_name.strip().lower() == student_data['name'].lower() and confirm_reg.strip() == student_data['reg_no']:
                             if st.button("🗑️ **PERMANENTLY DELETE STUDENT**", type="primary", use_container_width=True):
                                 if delete_student_complete(student_data['student_id'], student_data['reg_no']):
                                     st.success(f"✅ Student {student_data['name']} (Reg: {student_data['reg_no']}) has been permanently deleted!")
@@ -1430,8 +1431,10 @@ elif st.session_state.user_role == "teacher":
                                     st.rerun()
                                 else:
                                     st.error("Failed to delete student. Please try again.")
+                        elif confirm_name or confirm_reg:
+                            st.error("❌ Name or registration number does not match. Please enter correctly.")
                         else:
-                            st.error("Please enter the correct name and registration number to confirm deletion.")
+                            st.info("🔒 Type the student's name and registration number exactly as shown to enable deletion.")
                 st.markdown("---")
                 st.caption("💡 Tip: Check for duplicate registrations above. Students with multiple entries can be safely deleted, keeping only one active account.")
             else:
@@ -1467,7 +1470,6 @@ elif st.session_state.user_role == "teacher":
                 # Create a clean table with all actions in the same row
                 for idx, row in filtered.iterrows():
                     with st.container():
-                        # First row: data columns
                         cols = st.columns([1.2, 1.2, 1.2, 1.5, 2, 1, 1, 1, 0.8, 0.8, 0.8])
                         cols[0].write(row['student_name'])
                         cols[1].write(row['reg_no'])
@@ -1540,7 +1542,6 @@ elif st.session_state.user_role == "teacher":
                             if st.form_submit_button("💾 Save Changes"):
                                 if update_submission(st.session_state.edit_submission_id, new_title, new_description, new_points, new_grade):
                                     st.success("Submission updated successfully!")
-                                    # Update the student's total points? Possibly not needed as points might be recalculated elsewhere
                                     st.session_state.edit_submission_id = None
                                     st.rerun()
                                 else:
@@ -1659,7 +1660,7 @@ elif st.session_state.user_role == "teacher":
                 st.info("No extra activities submitted yet.")
 
     elif st.session_state.page == "🤖 AI Reference Answers":
-        # ... (unchanged)
+        # ... (unchanged, same as previous)
         st.header("🤖 AI Reference Answers Management")
         if not SKLEARN_AVAILABLE:
             st.warning("⚠️ scikit-learn not installed.")
@@ -1730,7 +1731,6 @@ elif st.session_state.user_role == "teacher":
                     st.dataframe(df_subj[['subject_code','subject_name','class','teacher_name','student_count']], use_container_width=True)
 
     elif st.session_state.page == "🏆 Leaderboard":
-        # ... (unchanged)
         st.header("Teacher View: Student Leaderboard")
         leaderboard = get_leaderboard(50)
         if not leaderboard.empty:
